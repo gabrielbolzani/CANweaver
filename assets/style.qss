@@ -1,0 +1,89 @@
+/* CANweaver Dark Modern Style Sheet */
+QMainWindow {
+    background-color: #121214;
+}
+
+QWidget {
+    color: #e1e1e6;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+}
+
+/* Data Table Styling */
+QTableView {
+    background-color: #1a1a1e;
+    color: #e1e1e6;
+    border: 1px solid #29292e;
+    gridline-color: #29292e;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 13px;
+    border-radius: 6px;
+}
+
+QTableView::item {
+    padding: 6px;
+}
+
+QTableView::item:hover {
+    background-color: #29292e;
+    color: #ffffff;
+}
+
+QTableView::item:selected {
+    background-color: #04d361;
+    color: #0d0d0f;
+    font-weight: bold;
+}
+
+/* Table Header Styling */
+QHeaderView::section {
+    background-color: #202024;
+    color: #8d8d99;
+    padding: 8px;
+    border: none;
+    border-bottom: 2px solid #29292e;
+    font-weight: bold;
+}
+
+/* Sidebar and Panel Elements */
+QListWidget, QTextEdit {
+    background-color: #1a1a1e;
+    border: 1px solid #29292e;
+    border-radius: 6px;
+    padding: 8px;
+    color: #e1e1e6;
+}
+
+/* Control Buttons */
+QPushButton {
+    background-color: #4e44dd;
+    color: #ffffff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 13px;
+}
+
+QPushButton:hover {
+    background-color: #6259ef;
+}
+
+QPushButton:pressed {
+    background-color: #3b33b3;
+}
+
+QPushButton#btn_hide {
+    background-color: #202024;
+    border: 1px solid #29292e;
+    color: #a8a8b3;
+}
+
+QPushButton#btn_hide:hover {
+    background-color: #29292e;
+    color: #ffffff;
+}
+
+QLabel {
+    font-size: 14px;
+    font-weight: 500;
+}

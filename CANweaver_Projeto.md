@@ -11,3 +11,6 @@ Estático
 ## [ID 3F0 - Byte 3] - 2026-06-21 01:12:04
 Proxima
 Anterior
+
+## [ID 0C0 - Byte 2 - Bit 1] - 2026-06-21 09:12:53
+teste
