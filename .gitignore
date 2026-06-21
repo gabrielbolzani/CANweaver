@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+venv/
+env/
+.env
+
+# Arquivos de gravação e log criados pelo CANweaver
+*.csv
+!CANweaver_Projeto.md
