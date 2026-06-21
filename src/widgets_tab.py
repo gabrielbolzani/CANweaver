@@ -295,4 +295,12 @@ class WidgetsTab(QWidget):
         w.show()
         w.move(pos)
         w.set_edit_mode(self.edit_mode)
-        # Opcionalmente poderíamos salvar config na lista self.widgets_list para persistência
+        
+    def export_data(self):
+        widgets_data = []
+        for w in self.canvas.findChildren(DashboardWidget):
+            cfg = w.config.copy()
+            cfg["pos_x"] = w.pos().x()
+            cfg["pos_y"] = w.pos().y()
+            widgets_data.append(cfg)
+        return widgets_data

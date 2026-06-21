@@ -28,12 +28,12 @@ import can
 from PyQt6.QtCore import Qt, QTimer, QDateTime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QToolBar, QPushButton, QLabel,
-    QMessageBox, QInputDialog, QLineEdit
+    QMessageBox, QInputDialog, QLineEdit, QWidget, QSizePolicy
 )
 from PyQt6.QtGui import QIcon
 
 from src.worker import CANWorker
-from src.dialogs import ConnectionDialog
+from src.dialogs import ConnectionDialog, AboutDialog
 from src.annotations import AnnotationManager
 from src.analysis_tab import AnalysisTab
 from src.transmit_tab import TransmitTab
@@ -87,6 +87,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _build_ui(self):
         from PyQt6.QtWidgets import QTabWidget
+        from PyQt6.QtGui import QAction
+
+        menubar = self.menuBar()
+        menubar.setStyleSheet("background-color: #202024; color: white; border-bottom: 1px solid #323238;")
+        
+        menu_file = menubar.addMenu("Arquivo")
+        action_export = QAction("Salvar Projeto (.cwp)...", self)
+        action_export.triggered.connect(self._export_project)
+        menu_file.addAction(action_export)
 
         # Toolbar global
         toolbar = QToolBar("Global Controls")
@@ -115,13 +124,69 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.btn_connect)
         toolbar.addWidget(self.btn_record)
         toolbar.addWidget(self.lbl_status)
+        
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        
+        self.btn_about = QPushButton("ℹ️ Sobre")
+        self.btn_about.clicked.connect(self._show_about)
+        self.btn_about.setStyleSheet("background-color: transparent; color: #3b82f6; font-weight: bold; margin-right: 15px; font-size: 14px;")
+        toolbar.addWidget(self.btn_about)
 
         # Abas
+        from PyQt6.QtWidgets import QTabWidget
         tab_widget = QTabWidget()
         tab_widget.addTab(self.analysis_tab, "Análise (Sniffer)")
         tab_widget.addTab(self.transmit_tab, "Transmitir")
         tab_widget.addTab(self.widgets_tab, "Widgets")
         self.setCentralWidget(tab_widget)
+
+    def _show_about(self):
+        from src.dialogs import AboutDialog
+        dlg = AboutDialog(self)
+        dlg.exec()
+
+    def _export_project(self):
+        from src.dialogs import ExportDialog
+        from PyQt6.QtWidgets import QFileDialog
+        import json
+        import zipfile
+        
+        dlg = ExportDialog(self)
+        if not dlg.exec():
+            return
+            
+        selection = dlg.get_selection()
+        if not any(selection.values()):
+            QMessageBox.warning(self, "Aviso", "Nenhuma opção foi selecionada para exportar.")
+            return
+            
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Salvar Projeto", "", "CANweaver Project (*.cwp);;Arquivos ZIP (*.zip)"
+        )
+        
+        if not file_path:
+            return
+            
+        try:
+            with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                if selection["annotations"]:
+                    md_path = os.path.join(BASE_DIR, "CANweaver_Projeto.md")
+                    if os.path.exists(md_path):
+                        zipf.write(md_path, "CANweaver_Projeto.md")
+                
+                if selection["transmit"]:
+                    transmit_data = self.transmit_tab.export_data()
+                    zipf.writestr("transmit_tasks.json", json.dumps(transmit_data, indent=4))
+                    
+                if selection["dashboard"]:
+                    dashboard_data = self.widgets_tab.export_data()
+                    zipf.writestr("dashboard_layout.json", json.dumps(dashboard_data, indent=4))
+                    
+            QMessageBox.information(self, "Sucesso", f"Projeto exportado com sucesso para:\n{file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao exportar projeto:\n{e}")
 
     def _load_stylesheet(self):
         qss_path = os.path.join(BASE_DIR, "assets", "style.qss")

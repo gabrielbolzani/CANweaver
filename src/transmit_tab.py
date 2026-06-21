@@ -197,11 +197,30 @@ class TransmitTab(QWidget):
             self.periodic_timers[task_id].stop()
             del self.periodic_timers[task_id]
 
+        row_idx = -1
         for r in range(self.tbl_periodic.rowCount()):
             item = self.tbl_periodic.item(r, 0)
             if item and item.data(Qt.ItemDataRole.UserRole + 2) == task_id:
-                self.tbl_periodic.removeRow(r)
+                row_idx = r
                 break
+        if row_idx >= 0:
+            self.tbl_periodic.removeRow(row_idx)
+
+    def export_data(self):
+        tasks = []
+        for i in range(self.tbl_periodic.rowCount()):
+            can_id = self.tbl_periodic.item(i, 0).text()
+            data_fmt = self.tbl_periodic.item(i, 1).text()
+            fmt = self.tbl_periodic.item(i, 1).data(Qt.ItemDataRole.UserRole)
+            freq = self.tbl_periodic.item(i, 2).text().replace(" Hz", "")
+            
+            tasks.append({
+                "can_id": can_id,
+                "data": data_fmt,
+                "format": fmt,
+                "freq": freq
+            })
+        return tasks
 
     def toggle_periodic_task(self, task_id: str):
         if task_id not in self.periodic_timers:

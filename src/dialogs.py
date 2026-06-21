@@ -15,6 +15,91 @@ from PyQt6.QtWidgets import (
     QLabel, QCheckBox, QFileDialog, QHBoxLayout, QVBoxLayout, QTextEdit
 )
 
+class AboutDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sobre o CANweaver")
+        self.resize(450, 250)
+        
+        layout = QVBoxLayout(self)
+        
+        lbl_title = QLabel("<h2>CANweaver v2.0</h2>")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        lbl_credits = QLabel(
+            "<b>Autores:</b> Gabriel Bolzani & Gemini e Companhia<br><br>"
+            "<b>Repositório:</b> <a href='https://github.com/gabrielbolzani/CANweaver' style='color: #3b82f6;'>https://github.com/gabrielbolzani/CANweaver</a>"
+        )
+        lbl_credits.setOpenExternalLinks(True)
+        lbl_credits.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        lbl_license = QLabel(
+            "<b>Licença:</b><br>"
+            "É estritamente proibida a venda ou uso comercial deste software.<br>"
+            "Qualquer modificação ou fork do código-fonte deve obrigatoriamente "
+            "creditar os autores originais do projeto."
+        )
+        lbl_license.setWordWrap(True)
+        lbl_license.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_license.setStyleSheet("color: #a1a1aa; font-size: 13px; margin-top: 15px; border-top: 1px solid #323238; padding-top: 10px;")
+        
+        btn_ok = QPushButton("Fechar")
+        btn_ok.clicked.connect(self.accept)
+        btn_ok.setStyleSheet("background-color: #2e3035; color: white; padding: 6px; border-radius: 4px; max-width: 100px;")
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addStretch()
+        
+        layout.addWidget(lbl_title)
+        layout.addWidget(lbl_credits)
+        layout.addWidget(lbl_license)
+        layout.addLayout(btn_layout)
+
+
+class ExportDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Exportar Projeto")
+        self.resize(350, 200)
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Selecione o que deseja incluir no arquivo do projeto:"))
+        
+        self.chk_annotations = QCheckBox("Anotações e Documentação (.md)")
+        self.chk_annotations.setChecked(True)
+        
+        self.chk_transmit = QCheckBox("Tarefas Cíclicas de Transmissão (.json)")
+        self.chk_transmit.setChecked(True)
+        
+        self.chk_dashboard = QCheckBox("Layout do Dashboard/Widgets (.json)")
+        self.chk_dashboard.setChecked(True)
+        
+        layout.addWidget(self.chk_annotations)
+        layout.addWidget(self.chk_transmit)
+        layout.addWidget(self.chk_dashboard)
+        
+        btn_layout = QHBoxLayout()
+        btn_ok = QPushButton("Exportar...")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+        
+        layout.addStretch()
+        layout.addLayout(btn_layout)
+
+    def get_selection(self):
+        return {
+            "annotations": self.chk_annotations.isChecked(),
+            "transmit": self.chk_transmit.isChecked(),
+            "dashboard": self.chk_dashboard.isChecked()
+        }
+
 
 class ConnectionDialog(QDialog):
     def __init__(self, parent=None):
