@@ -59,39 +59,66 @@ class AboutDialog(QDialog):
 
 
 class ExportDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, default_name="MeuProjeto"):
         super().__init__(parent)
-        self.setWindowTitle("Exportar Projeto")
-        self.resize(350, 200)
-        
+        self.setWindowTitle("Salvar Projeto Como...")
+        self.resize(380, 260)
+
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Selecione o que deseja incluir no arquivo do projeto:"))
-        
+
+        name_layout = QHBoxLayout()
+        name_layout.addWidget(QLabel("Nome do arquivo:"))
+        self.txt_name = QLineEdit(default_name)
+        name_layout.addWidget(self.txt_name)
+        layout.addLayout(name_layout)
+
+        layout.addWidget(QLabel("Selecione o que incluir:"))
+
         self.chk_annotations = QCheckBox("Anotações e Documentação (.md)")
         self.chk_annotations.setChecked(True)
-        
+
         self.chk_transmit = QCheckBox("Tarefas Cíclicas de Transmissão (.json)")
         self.chk_transmit.setChecked(True)
-        
+
         self.chk_dashboard = QCheckBox("Layout do Dashboard/Widgets (.json)")
         self.chk_dashboard.setChecked(True)
-        
+
+        # Atualiza label do botão conforme seleção muda
+        for chk in (self.chk_annotations, self.chk_transmit, self.chk_dashboard):
+            chk.stateChanged.connect(self._update_btn_label)
+
         layout.addWidget(self.chk_annotations)
         layout.addWidget(self.chk_transmit)
         layout.addWidget(self.chk_dashboard)
-        
+
+        self.lbl_hint = QLabel()
+        self.lbl_hint.setStyleSheet("color: #a1a1aa; font-size: 11px;")
+        layout.addWidget(self.lbl_hint)
+
         btn_layout = QHBoxLayout()
-        btn_ok = QPushButton("Exportar...")
-        btn_ok.clicked.connect(self.accept)
+        self.btn_ok = QPushButton("Salvar Como...")
+        self.btn_ok.clicked.connect(self.accept)
         btn_cancel = QPushButton("Cancelar")
         btn_cancel.clicked.connect(self.reject)
-        
+
         btn_layout.addStretch()
-        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(self.btn_ok)
         btn_layout.addWidget(btn_cancel)
-        
+
         layout.addStretch()
         layout.addLayout(btn_layout)
+
+        self._update_btn_label()
+
+    def _update_btn_label(self):
+        sel = self.get_selection()
+        checked = [k for k, v in sel.items() if v]
+        ext_map = {"annotations": ".md", "transmit": ".json", "dashboard": ".json"}
+        if len(checked) == 1:
+            ext = ext_map[checked[0]]
+            self.lbl_hint.setText(f"💡 Apenas 1 item selecionado — será salvo diretamente como {ext}")
+        else:
+            self.lbl_hint.setText("💡 Múltiplos itens — serão compactados em .cwp")
 
     def get_selection(self):
         return {
@@ -99,6 +126,9 @@ class ExportDialog(QDialog):
             "transmit": self.chk_transmit.isChecked(),
             "dashboard": self.chk_dashboard.isChecked()
         }
+
+    def get_name(self):
+        return self.txt_name.text().strip() or "MeuProjeto"
 
 
 class ConnectionDialog(QDialog):

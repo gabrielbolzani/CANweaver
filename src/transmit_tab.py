@@ -222,6 +222,20 @@ class TransmitTab(QWidget):
             })
         return tasks
 
+    def import_data(self, tasks: list):
+        """Restaura tarefas periódicas a partir de uma lista de dicts exportados."""
+        self.stop_all_periodic()
+        # Remove todas as linhas existentes
+        while self.tbl_periodic.rowCount() > 0:
+            self.tbl_periodic.removeRow(0)
+        for task in tasks:
+            self.txt_per_id.setText(task.get("can_id", ""))
+            self.txt_per_data.setText(task.get("data", ""))
+            self.txt_per_freq.setText(str(task.get("freq", "10")))
+            fmt = task.get("format", "HEX")
+            self.cb_per_format.setCurrentText(fmt)
+            self.add_periodic_task()
+
     def toggle_periodic_task(self, task_id: str):
         if task_id not in self.periodic_timers:
             return

@@ -214,7 +214,7 @@ class WidgetsTab(QWidget):
 
         toolbar = QHBoxLayout()
         
-        self.btn_edit = QPushButton("🔒 Travar Layout")
+        self.btn_edit = QPushButton("🔒 Layout Travado")
         self.btn_edit.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
         self.btn_edit.setCheckable(True)
         self.btn_edit.toggled.connect(self.toggle_edit_mode)
@@ -261,10 +261,10 @@ class WidgetsTab(QWidget):
     def toggle_edit_mode(self, checked):
         self.edit_mode = checked
         if checked:
-            self.btn_edit.setText("🔓 Destravar Layout")
+            self.btn_edit.setText("🔓 Layout Destravado")
             self.btn_edit.setStyleSheet("background-color: #f59e0b; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
         else:
-            self.btn_edit.setText("🔒 Travar Layout")
+            self.btn_edit.setText("🔒 Layout Travado")
             self.btn_edit.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
             
         for w in self.canvas.findChildren(DashboardWidget):
@@ -304,3 +304,24 @@ class WidgetsTab(QWidget):
             cfg["pos_y"] = w.pos().y()
             widgets_data.append(cfg)
         return widgets_data
+
+    def import_data(self, widgets_data: list):
+        """Restaura widgets no canvas a partir de uma lista de dicts exportados."""
+        from PyQt6.QtCore import QPoint
+        # Remove widgets existentes
+        for w in self.canvas.findChildren(DashboardWidget):
+            w.deleteLater()
+        for cfg in widgets_data:
+            pos = QPoint(cfg.get("pos_x", 20), cfg.get("pos_y", 20))
+            wtype = cfg.get("type", "")
+            if wtype == "label":
+                widget = LabelWidget(self.canvas, cfg)
+            elif wtype == "indicator":
+                widget = IndicatorWidget(self.canvas, cfg)
+            elif wtype == "controller":
+                widget = ControllerWidget(self.canvas, cfg, self.can_thread)
+            else:
+                continue
+            widget.show()
+            widget.move(pos)
+            widget.set_edit_mode(self.edit_mode)

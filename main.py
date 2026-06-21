@@ -19,6 +19,7 @@ Assets (ícone, stylesheet):
 
 import sys
 import os
+import re
 import csv
 import time
 import ctypes
@@ -27,8 +28,8 @@ import can
 
 from PyQt6.QtCore import Qt, QTimer, QDateTime
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QToolBar, QPushButton, QLabel,
-    QMessageBox, QInputDialog, QLineEdit, QWidget, QSizePolicy
+    QApplication, QMainWindow, QPushButton, QLabel,
+    QMessageBox, QInputDialog, QLineEdit, QWidget, QHBoxLayout
 )
 from PyQt6.QtGui import QIcon
 
@@ -82,6 +83,9 @@ class MainWindow(QMainWindow):
         self.record_timer = QTimer()
         self.record_timer.timeout.connect(self._update_record_time)
 
+        # Caminho do projeto aberto (None = nenhum projeto)
+        self.current_project_path = None
+
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
@@ -90,52 +94,83 @@ class MainWindow(QMainWindow):
         from PyQt6.QtGui import QAction
 
         menubar = self.menuBar()
-        menubar.setStyleSheet("background-color: #202024; color: white; border-bottom: 1px solid #323238;")
-        
-        menu_file = menubar.addMenu("Arquivo")
-        action_export = QAction("Salvar Projeto (.cwp)...", self)
-        action_export.triggered.connect(self._export_project)
-        menu_file.addAction(action_export)
-
-        # Toolbar global
-        toolbar = QToolBar("Global Controls")
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
-        toolbar.setMovable(False)
-        toolbar.setStyleSheet("background-color: #202024; border-bottom: 1px solid #323238;")
-
-        self.btn_connect = QPushButton("Conectar...")
-        self.btn_connect.clicked.connect(self._open_connection_dialog)
-        self.btn_connect.setStyleSheet(
-            "background-color: #4e44dd; color: white; padding: 6px 12px; "
-            "border-radius: 4px; font-weight: bold; margin-right: 10px; margin-left: 10px;"
+        menubar.setStyleSheet(
+            "QMenuBar { background-color: #202024; color: white; padding: 0px 4px; }"
+            "QMenuBar::item { background: transparent; padding: 5px 14px; border-radius: 4px; }"
+            "QMenuBar::item:selected { background-color: #2e3035; }"
+            "QMenu { background-color: #202024; color: white; border: 1px solid #323238;"
+            "        min-width: 270px; padding: 4px 0px; }"
+            "QMenu::item { padding: 6px 48px 6px 16px; }"
+            "QMenu::item:selected { background-color: #3b82f6; }"
+            "QMenu::item:disabled { color: #52525b; }"
+            "QMenu::separator { height: 1px; background: #323238; margin: 4px 8px; }"
         )
 
-        self.btn_record = QPushButton("⏺ Gravar (REC)")
+        # ── Menu Arquivo ───────────────────────────────────────────────
+        menu_file = menubar.addMenu("Arquivo")
+
+        action_open = QAction("Abrir Projeto (.cwp)...", self)
+        action_open.triggered.connect(self._open_project)
+        menu_file.addAction(action_open)
+
+        menu_file.addSeparator()
+
+        self.action_save = QAction("Salvar Projeto", self)
+        self.action_save.setShortcut("Ctrl+S")
+        self.action_save.setEnabled(False)
+        self.action_save.triggered.connect(self._save_project)
+        menu_file.addAction(self.action_save)
+
+        action_save_as = QAction("Salvar Como...", self)
+        action_save_as.setShortcut("Ctrl+Shift+S")
+        action_save_as.triggered.connect(self._save_project_as)
+        menu_file.addAction(action_save_as)
+
+        # ── Menu Conexão ─────────────────────────────────────────────
+        menu_conn = menubar.addMenu("Conexão")
+
+        action_connect = QAction("🔌  Conectar ao Barramento...", self)
+        action_connect.triggered.connect(self._open_connection_dialog)
+        menu_conn.addAction(action_connect)
+
+        # ── Corner widget: Gravar | Status | Sobre ────────────────────
+        corner = QWidget()
+        corner.setStyleSheet("background-color: #202024;")
+        corner_layout = QHBoxLayout(corner)
+        corner_layout.setContentsMargins(0, 0, 8, 0)
+        corner_layout.setSpacing(8)
+
+        self.btn_record = QPushButton("⏺  Gravar")
         self.btn_record.setCheckable(True)
         self.btn_record.clicked.connect(self._toggle_recording)
+        self.btn_record.setMinimumWidth(90)
         self.btn_record.setStyleSheet(
-            "background-color: #2e3035; color: white; padding: 6px 12px; "
-            "border-radius: 4px; margin-right: 20px;"
+            "QPushButton { background-color: #2e3035; color: white; padding: 4px 10px;"
+            " border-radius: 4px; font-size: 12px; min-width: 90px; }"
+            "QPushButton:checked { background-color: #e83f5b; color: white; }"
         )
 
-        self.lbl_status = QLabel("Status: Ocioso (Desconectado)")
-        self.lbl_status.setStyleSheet("color: #a1a1aa; font-weight: bold;")
+        self.lbl_status = QLabel("Desconectado")
+        self.lbl_status.setStyleSheet(
+            "color: #a1a1aa; font-weight: bold; font-size: 11px; padding: 0 4px;"
+        )
 
-        toolbar.addWidget(self.btn_connect)
-        toolbar.addWidget(self.btn_record)
-        toolbar.addWidget(self.lbl_status)
-        
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(spacer)
-        
-        self.btn_about = QPushButton("ℹ️ Sobre")
+        self.btn_about = QPushButton("ℹ️")
+        self.btn_about.setToolTip("Sobre o CANweaver")
         self.btn_about.clicked.connect(self._show_about)
-        self.btn_about.setStyleSheet("background-color: transparent; color: #3b82f6; font-weight: bold; margin-right: 15px; font-size: 14px;")
-        toolbar.addWidget(self.btn_about)
+        self.btn_about.setStyleSheet(
+            "QPushButton { background: transparent; color: #3b82f6; font-size: 16px;"
+            " border: none; padding: 0 4px; }"
+            "QPushButton:hover { color: #60a5fa; }"
+        )
 
-        # Abas
-        from PyQt6.QtWidgets import QTabWidget
+        corner_layout.addWidget(self.btn_record)
+        corner_layout.addWidget(self.lbl_status)
+        corner_layout.addWidget(self.btn_about)
+
+        menubar.setCornerWidget(corner, Qt.Corner.TopRightCorner)
+
+        # ── Abas ───────────────────────────────────────────────────
         tab_widget = QTabWidget()
         tab_widget.addTab(self.analysis_tab, "Análise (Sniffer)")
         tab_widget.addTab(self.transmit_tab, "Transmitir")
@@ -147,46 +182,156 @@ class MainWindow(QMainWindow):
         dlg = AboutDialog(self)
         dlg.exec()
 
-    def _export_project(self):
+    # ------------------------------------------------------------------
+    # Projeto: Salvar / Abrir
+    # ------------------------------------------------------------------
+    def _set_project_path(self, path: str):
+        """Atualiza o caminho e habilita o menu Salvar."""
+        self.current_project_path = path
+        self.action_save.setEnabled(True)
+        name = os.path.basename(path)
+        self.setWindowTitle(f"CANweaver v2.0 — {name}")
+
+    def _collect_project_data(self):
+        """Coleta os dados de todas as abas para montar o pacote."""
+        import json
+        data = {}
+        md_path = os.path.join(BASE_DIR, "CANweaver_Projeto.md")
+        if os.path.exists(md_path):
+            with open(md_path, "r", encoding="utf-8") as f:
+                data["annotations_md"] = f.read()
+        data["transmit_tasks"] = self.transmit_tab.export_data()
+        data["dashboard_layout"] = self.widgets_tab.export_data()
+        return data
+
+    def _write_project(self, file_path: str, selection: dict):
+        """Empacota os dados selecionados e salva no caminho dado."""
+        import json, zipfile
+
+        checked = [k for k, v in selection.items() if v]
+        full_data = self._collect_project_data()
+
+        # Caso especial: só 1 item — salva diretamente sem ZIP
+        if len(checked) == 1:
+            key = checked[0]
+            if key == "annotations":
+                content = full_data.get("annotations_md", "")
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            elif key == "transmit":
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(full_data["transmit_tasks"], f, indent=4)
+            elif key == "dashboard":
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(full_data["dashboard_layout"], f, indent=4)
+            return
+
+        # Múltiplos itens — ZIP
+        with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            if selection.get("annotations") and "annotations_md" in full_data:
+                zipf.writestr("CANweaver_Projeto.md", full_data["annotations_md"])
+            if selection.get("transmit"):
+                zipf.writestr("transmit_tasks.json",
+                              json.dumps(full_data["transmit_tasks"], indent=4))
+            if selection.get("dashboard"):
+                zipf.writestr("dashboard_layout.json",
+                              json.dumps(full_data["dashboard_layout"], indent=4))
+
+    def _save_project(self):
+        """Salva no caminho já conhecido (sem abrir dialog)."""
+        if not self.current_project_path:
+            self._save_project_as()
+            return
+        try:
+            # Ao salvar no mesmo arquivo, assume seleção total (era um .cwp)
+            sel = {"annotations": True, "transmit": True, "dashboard": True}
+            self._write_project(self.current_project_path, sel)
+            self.statusBar().showMessage("Projeto salvo.", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao salvar:\n{e}")
+
+    def _save_project_as(self):
+        """Abre o diálogo completo de exportação."""
         from src.dialogs import ExportDialog
         from PyQt6.QtWidgets import QFileDialog
-        import json
-        import zipfile
-        
-        dlg = ExportDialog(self)
+
+        default = os.path.splitext(os.path.basename(self.current_project_path))[0] \
+            if self.current_project_path else "MeuProjeto"
+
+        dlg = ExportDialog(self, default_name=default)
         if not dlg.exec():
             return
-            
+
         selection = dlg.get_selection()
         if not any(selection.values()):
-            QMessageBox.warning(self, "Aviso", "Nenhuma opção foi selecionada para exportar.")
+            QMessageBox.warning(self, "Aviso", "Nenhuma opção selecionada.")
             return
-            
+
+        checked = [k for k, v in selection.items() if v]
+        if len(checked) == 1:
+            ext_map = {"annotations": "Markdown (*.md)",
+                       "transmit": "JSON (*.json)",
+                       "dashboard": "JSON (*.json)"}
+            filter_str = ext_map[checked[0]]
+        else:
+            filter_str = "CANweaver Project (*.cwp)"
+
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Salvar Projeto", "", "CANweaver Project (*.cwp);;Arquivos ZIP (*.zip)"
+            self, "Salvar Projeto", dlg.get_name(), filter_str
         )
-        
         if not file_path:
             return
-            
+
         try:
-            with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                if selection["annotations"]:
-                    md_path = os.path.join(BASE_DIR, "CANweaver_Projeto.md")
-                    if os.path.exists(md_path):
-                        zipf.write(md_path, "CANweaver_Projeto.md")
-                
-                if selection["transmit"]:
-                    transmit_data = self.transmit_tab.export_data()
-                    zipf.writestr("transmit_tasks.json", json.dumps(transmit_data, indent=4))
-                    
-                if selection["dashboard"]:
-                    dashboard_data = self.widgets_tab.export_data()
-                    zipf.writestr("dashboard_layout.json", json.dumps(dashboard_data, indent=4))
-                    
-            QMessageBox.information(self, "Sucesso", f"Projeto exportado com sucesso para:\n{file_path}")
+            self._write_project(file_path, selection)
+            # Só atualiza o projeto "ativo" se salvou como .cwp completo
+            if file_path.endswith(".cwp"):
+                self._set_project_path(file_path)
+            QMessageBox.information(self, "Sucesso",
+                                    f"Arquivo salvo em:\n{file_path}")
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao exportar projeto:\n{e}")
+            QMessageBox.critical(self, "Erro", f"Erro ao salvar:\n{e}")
+
+    def _open_project(self):
+        """Abre um .cwp e restaura o estado de todas as abas."""
+        from PyQt6.QtWidgets import QFileDialog
+        import json, zipfile
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Abrir Projeto", "",
+            "CANweaver Project (*.cwp);;Arquivos ZIP (*.zip)"
+        )
+        if not file_path:
+            return
+
+        try:
+            with zipfile.ZipFile(file_path, 'r') as zipf:
+                names = zipf.namelist()
+
+                if "CANweaver_Projeto.md" in names:
+                    md_content = zipf.read("CANweaver_Projeto.md").decode("utf-8")
+                    md_path = os.path.join(BASE_DIR, "CANweaver_Projeto.md")
+                    with open(md_path, "w", encoding="utf-8") as f:
+                        f.write(md_content)
+                    self.annotation_manager.load()
+
+                if "transmit_tasks.json" in names:
+                    tasks = json.loads(zipf.read("transmit_tasks.json").decode("utf-8"))
+                    self.transmit_tab.import_data(tasks)
+
+                if "dashboard_layout.json" in names:
+                    layout = json.loads(zipf.read("dashboard_layout.json").decode("utf-8"))
+                    self.widgets_tab.import_data(layout)
+
+            self._set_project_path(file_path)
+            QMessageBox.information(self, "Projeto Aberto",
+                                    f"Projeto carregado:\n{os.path.basename(file_path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao abrir projeto:\n{e}")
+
+    # Manter compatibilidade com chamada antiga (se houver)
+    def _export_project(self):
+        self._save_project_as()
 
     def _load_stylesheet(self):
         qss_path = os.path.join(BASE_DIR, "assets", "style.qss")
@@ -224,20 +369,20 @@ class MainWindow(QMainWindow):
                     bitrate=config["bitrate"]
                 )
                 self.lbl_status.setText(
-                    f"Status: Conectado ({config['interface']} em {config['channel']} @ {config['bitrate']})"
+                    f"{config['interface']} | {config['channel']} @ {config['bitrate']}"
                 )
             except Exception as e:
                 QMessageBox.critical(self, "Erro de Conexão", f"Não foi possível conectar ao hardware:\n{e}")
-                self.lbl_status.setText("Status: Erro de Conexão")
+                self.lbl_status.setText(f"Erro de Conexão")
                 return
         elif config["mode"] == "PLAYBACK":
             if not config["playback_file"]:
                 QMessageBox.warning(self, "Aviso", "Nenhum arquivo selecionado.")
                 return
             self.can_thread.playback_file = config["playback_file"]
-            self.lbl_status.setText(f"Status: Reproduzindo {config['playback_file'].split('/')[-1]}")
+            self.lbl_status.setText(f"Playback: {config['playback_file'].split('/')[-1]}")
         else:
-            self.lbl_status.setText("Status: Conectado ao Barramento (Simulado)")
+            self.lbl_status.setText("Simulado")
 
         # Atualizar referência da thread nas abas
         self.analysis_tab.can_thread = self.can_thread
@@ -253,7 +398,7 @@ class MainWindow(QMainWindow):
     def _handle_worker_error(self, err_msg: str):
         QMessageBox.warning(self, "Aviso da Thread", err_msg)
         if "Reprodução concluída" in err_msg:
-            self.lbl_status.setText("Status: Reprodução Finalizada")
+            self.lbl_status.setText("Reprodução Finalizada")
 
     # ------------------------------------------------------------------
     # Gravação
@@ -270,12 +415,10 @@ class MainWindow(QMainWindow):
                 # Conectar gravação ao processamento de frames
                 self.can_thread.frame_received.connect(self._record_frame)
 
-                self.btn_record.setStyleSheet(
-                    "background-color: #e83f5b; color: white; padding: 6px 12px; border-radius: 4px; margin-right: 20px;"
-                )
-                self.lbl_status.setText(self.lbl_status.text() + " [GRAVANDO]")
+                old_txt = self.lbl_status.text().replace(" [REC]", "")
+                self.lbl_status.setText(old_txt + " [REC]")
                 self.record_timer.start(1000)
-                self.btn_record.setText("⏹ Gravando (00:00)")
+                self.btn_record.setText("⏹  REC")
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Falha ao criar cache de gravação:\n{e}")
                 self.btn_record.setChecked(False)
@@ -316,11 +459,8 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
-            self.btn_record.setText("⏺ Gravar (REC)")
-            self.btn_record.setStyleSheet(
-                "background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px; margin-right: 20px;"
-            )
-            self.lbl_status.setText(self.lbl_status.text().replace(" [GRAVANDO]", ""))
+            self.btn_record.setText("⏺  Gravar")
+            self.lbl_status.setText(self.lbl_status.text().replace(" ⏹ 00:00 [REC]", "").replace(" [REC]", ""))
 
     def _record_frame(self, can_id: int, frequency: float, payload: list):
         if self.is_recording and self.record_writer:
@@ -330,7 +470,9 @@ class MainWindow(QMainWindow):
         if self.is_recording:
             elapsed = int(time.time() - self.record_start_time)
             mins, secs = divmod(elapsed, 60)
-            self.btn_record.setText(f"⏹ Gravando ({mins:02d}:{secs:02d})")
+            # Remove tempo anterior e atualiza status
+            base = re.sub(r' ⏹ \d+:\d+', '', self.lbl_status.text()).replace(" [REC]", "")
+            self.lbl_status.setText(f"{base} ⏹ {mins:02d}:{secs:02d} [REC]")
 
 
 if __name__ == "__main__":
