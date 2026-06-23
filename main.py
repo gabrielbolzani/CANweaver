@@ -46,7 +46,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("CANweaver v2.0 - AI Assisted CAN Reverse Engineering")
+        self.setWindowTitle("CANweaver 0.1b - AI Assisted CAN Reverse Engineering")
         icon_path = os.path.join(BASE_DIR, "assets", "ico.ico")
         self.setWindowIcon(QIcon(icon_path))
         self.resize(1280, 720)
@@ -99,8 +99,8 @@ class MainWindow(QMainWindow):
             "QMenuBar::item { background: transparent; padding: 5px 14px; border-radius: 4px; }"
             "QMenuBar::item:selected { background-color: #2e3035; }"
             "QMenu { background-color: #202024; color: white; border: 1px solid #323238;"
-            "        min-width: 270px; padding: 4px 0px; }"
-            "QMenu::item { padding: 6px 48px 6px 16px; }"
+            "        min-width: 220px; padding: 4px 0px; }"
+            "QMenu::item { padding: 6px 20px; }"
             "QMenu::item:selected { background-color: #3b82f6; }"
             "QMenu::item:disabled { color: #52525b; }"
             "QMenu::separator { height: 1px; background: #323238; margin: 4px 8px; }"
