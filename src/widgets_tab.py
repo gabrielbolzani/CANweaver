@@ -2,12 +2,12 @@
 widgets_tab.py — Widget da Aba de Painéis / Gauges
 """
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QPoint
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QMenu
 )
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QColor
 
 from src.widget_dialogs import LabelDialog, IndicatorDialog, ControllerDialog
 
@@ -18,6 +18,7 @@ class DashboardWidget(QWidget):
         self.config = config
         self.edit_mode = False
         self._drag_start_pos = None
+        self.edit_callback = None  # Definido por WidgetsTab ao posicionar o widget
 
     def set_edit_mode(self, enabled):
         self.edit_mode = enabled
@@ -52,8 +53,17 @@ class DashboardWidget(QWidget):
     def contextMenuEvent(self, event):
         if self.edit_mode:
             menu = QMenu(self)
+            menu.setStyleSheet(
+                "QMenu { background-color: #202024; color: white; border: 1px solid #323238; }"
+                "QMenu::item { padding: 6px 24px; }"
+                "QMenu::item:selected { background-color: #3b82f6; }"
+            )
+            action_edit = QAction("✏️ Editar Widget", self)
+            action_edit.triggered.connect(lambda: self.edit_callback(self) if self.edit_callback else None)
             action_del = QAction("🗑 Excluir Widget", self)
             action_del.triggered.connect(self.deleteLater)
+            menu.addAction(action_edit)
+            menu.addSeparator()
             menu.addAction(action_del)
             menu.exec(event.globalPos())
         else:
@@ -68,7 +78,10 @@ class LabelWidget(DashboardWidget):
         self.lbl = QLabel(config["text"])
         size = config.get("size", 14)
         bold = "font-weight: bold;" if config.get("bold", False) else ""
-        self.lbl.setStyleSheet(f"color: white; font-size: {size}px; {bold}")
+        italic = "font-style: italic;" if config.get("italic", False) else ""
+        strike = "text-decoration: line-through;" if config.get("strikethrough", False) else ""
+        color = config.get("color", "#ffffff")
+        self.lbl.setStyleSheet(f"color: {color}; font-size: {size}px; {bold} {italic} {strike}")
         layout.addWidget(self.lbl)
 
 
@@ -292,10 +305,47 @@ class WidgetsTab(QWidget):
             self._place_widget(w, pos)
 
     def _place_widget(self, w: DashboardWidget, pos):
+        w.edit_callback = self._edit_widget
         w.show()
         w.move(pos)
         w.set_edit_mode(self.edit_mode)
         
+    def clear_all(self):
+        """Remove todos os widgets do canvas — usado pelo 'Novo Projeto'."""
+        for w in self.canvas.findChildren(DashboardWidget):
+            w.deleteLater()
+        # Desliga modo de edição
+        if self.edit_mode:
+            self.btn_edit.setChecked(False)
+
+    def _edit_widget(self, widget: DashboardWidget):
+        """Abre o diálogo de edição para o widget selecionado."""
+        from src.widget_dialogs import LabelDialog, IndicatorDialog, ControllerDialog
+        wtype = widget.config.get("type", "")
+        pos = widget.pos()
+
+        if wtype == "label":
+            dlg = LabelDialog(self, config=widget.config)
+        elif wtype == "indicator":
+            dlg = IndicatorDialog(self, config=widget.config)
+        elif wtype == "controller":
+            dlg = ControllerDialog(self, config=widget.config)
+        else:
+            return
+
+        if dlg.exec():
+            new_cfg = dlg.get_config()
+            widget.deleteLater()
+            if wtype == "label":
+                new_w = LabelWidget(self.canvas, new_cfg)
+            elif wtype == "indicator":
+                new_w = IndicatorWidget(self.canvas, new_cfg)
+            elif wtype == "controller":
+                new_w = ControllerWidget(self.canvas, new_cfg, self.can_thread)
+            else:
+                return
+            self._place_widget(new_w, pos)
+
     def export_data(self):
         widgets_data = []
         for w in self.canvas.findChildren(DashboardWidget):
@@ -307,7 +357,6 @@ class WidgetsTab(QWidget):
 
     def import_data(self, widgets_data: list):
         """Restaura widgets no canvas a partir de uma lista de dicts exportados."""
-        from PyQt6.QtCore import QPoint
         # Remove widgets existentes
         for w in self.canvas.findChildren(DashboardWidget):
             w.deleteLater()
@@ -322,6 +371,4 @@ class WidgetsTab(QWidget):
                 widget = ControllerWidget(self.canvas, cfg, self.can_thread)
             else:
                 continue
-            widget.show()
-            widget.move(pos)
-            widget.set_edit_mode(self.edit_mode)
+            self._place_widget(widget, pos)

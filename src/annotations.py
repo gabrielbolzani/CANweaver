@@ -36,6 +36,7 @@ class AnnotationManager:
 
     def load(self):
         """Carrega anotações do arquivo .md para a memória."""
+        self.annotations.clear()  # Sempre reseta antes de carregar
         if not os.path.exists(self.filename):
             return
 
@@ -62,6 +63,15 @@ class AnnotationManager:
 
         if current_target and current_comment:
             self._save_to_dict(current_target, "\n".join(current_comment).strip())
+
+    def clear(self):
+        """Apaga todas as anotações da memória e do arquivo."""
+        self.annotations.clear()
+        try:
+            with open(self.filename, "w", encoding="utf-8") as f:
+                f.write("")
+        except Exception:
+            pass
 
     def add_comment(self, target: str, text: str):
         """Adiciona um comentário ao arquivo e ao dicionário em memória."""

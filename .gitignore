@@ -13,4 +13,7 @@ env/
 
 # Arquivos de gravação e log criados pelo CANweaver
 *.csv
-!CANweaver_Projeto.md
+
+# Arquivos de projeto e anotações do usuário (não devem ir ao git)
+CANweaver_Projeto.md
+*.cwp

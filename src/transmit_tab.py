@@ -294,3 +294,15 @@ class TransmitTab(QWidget):
             if item:
                 item.setText("Parado")
                 item.setForeground(QColor("white"))
+
+    def clear_all(self):
+        """Limpa todas as tarefas e campos — usado pelo 'Novo Projeto'."""
+        self.stop_all_periodic()
+        self.periodic_timers.clear()
+        while self.tbl_periodic.rowCount() > 0:
+            self.tbl_periodic.removeRow(0)
+        self.txt_single_id.clear()
+        self.txt_single_data.clear()
+        self.txt_per_id.clear()
+        self.txt_per_data.clear()
+        self.txt_per_freq.clear()

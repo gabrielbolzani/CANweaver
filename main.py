@@ -106,8 +106,15 @@ class MainWindow(QMainWindow):
             "QMenu::separator { height: 1px; background: #323238; margin: 4px 8px; }"
         )
 
-        # ── Menu Arquivo ───────────────────────────────────────────────
+        # ── Menu Arquivo ───────────────────────────────────────────────────────
         menu_file = menubar.addMenu("Arquivo")
+
+        action_new = QAction("Novo", self)
+        action_new.setShortcut("Ctrl+N")
+        action_new.triggered.connect(self._new_project)
+        menu_file.addAction(action_new)
+
+        menu_file.addSeparator()
 
         action_open = QAction("Abrir Projeto (.cwp)...", self)
         action_open.triggered.connect(self._open_project)
@@ -181,6 +188,35 @@ class MainWindow(QMainWindow):
         from src.dialogs import AboutDialog
         dlg = AboutDialog(self)
         dlg.exec()
+
+    # ------------------------------------------------------------------
+    # Novo Projeto
+    # ------------------------------------------------------------------
+    def _new_project(self):
+        """Limpa toda a sessão atual após confirmação do usuário."""
+        reply = QMessageBox.question(
+            self, "Novo Projeto",
+            "Isso vai apagar todas as abas, widgets, tarefas e anotações da sessão atual.\n"
+            "Deseja continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Limpa cada aba
+        self.analysis_tab.clear_data()
+        self.transmit_tab.clear_all()
+        self.widgets_tab.clear_all()
+
+        # Apaga anotações da memória e do arquivo
+        self.annotation_manager.clear()
+
+        # Reseta o estado do projeto
+        self.current_project_path = None
+        self.action_save.setEnabled(False)
+        self.setWindowTitle("CANweaver v2.0 - AI Assisted CAN Reverse Engineering")
+        self.statusBar().showMessage("Novo projeto criado.", 3000)
 
     # ------------------------------------------------------------------
     # Projeto: Salvar / Abrir
