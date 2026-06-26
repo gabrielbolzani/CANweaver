@@ -30,6 +30,7 @@ class CANWorker(QThread):
     """
     frame_received = pyqtSignal(int, float, list)
     error_occurred = pyqtSignal(str)
+    playback_progress = pyqtSignal(int, int)
 
     def __init__(self):
         super().__init__()
@@ -39,6 +40,7 @@ class CANWorker(QThread):
         self.playback_file = ""
         self.playback_transmit = False
         self.playback_loop = False
+        self.seek_requested = None
         self.last_timestamps = {}
         self.counters = {0x0C0: 0, 0x180: 0, 0x3F0: 0}
 
@@ -77,48 +79,63 @@ class CANWorker(QThread):
 
     def _run_playback(self):
         try:
+            with open(self.playback_file, mode='r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                headers = next(reader, None)
+                self.playback_rows = [row for row in reader if len(row) >= 4]
+
+            self.playback_total = len(self.playback_rows)
+            self.playback_index = 0
+
             while self.running:
-                with open(self.playback_file, mode='r', encoding='utf-8') as f:
-                    reader = csv.reader(f)
-                    next(reader, None)
-                    last_msg_time = None
+                last_msg_time = None
 
-                    for row in reader:
-                        if not self.running:
-                            break
-                        if len(row) < 4:
-                            continue
+                while self.playback_index < self.playback_total and self.running:
+                    if self.seek_requested is not None:
+                        self.playback_index = self.seek_requested
+                        self.seek_requested = None
+                        last_msg_time = None
+                        
+                    if self.playback_index >= self.playback_total:
+                        break
 
-                        timestamp = float(row[0])
-                        can_id = int(row[1], 16)
-                        payload = [int(x, 16) for x in row[3:]]
+                    row = self.playback_rows[self.playback_index]
 
-                        if last_msg_time is not None:
-                            delay = timestamp - last_msg_time
-                            if delay > 0:
-                                time.sleep(delay)
+                    timestamp = float(row[0])
+                    can_id = int(row[1], 16)
+                    payload = [int(x, 16) for x in row[3:]]
 
-                        last_msg_time = timestamp
+                    if last_msg_time is not None:
+                        delay = timestamp - last_msg_time
+                        if delay > 0:
+                            time.sleep(delay)
 
-                        if self.playback_transmit and self.bus:
-                            try:
-                                msg = can.Message(arbitration_id=can_id, data=payload, is_extended_id=False)
-                                self.bus.send(msg)
-                            except Exception:
-                                pass
+                    last_msg_time = timestamp
 
-                        current_time = time.time()
-                        if can_id in self.last_timestamps:
-                            period = current_time - self.last_timestamps[can_id]
-                            freq = 1.0 / period if period > 0 else 0.0
-                        else:
-                            freq = 0.0
+                    if self.playback_transmit and self.bus:
+                        try:
+                            msg = can.Message(arbitration_id=can_id, data=payload, is_extended_id=False)
+                            self.bus.send(msg)
+                        except Exception:
+                            pass
 
-                        self.last_timestamps[can_id] = current_time
-                        self.frame_received.emit(can_id, freq, payload)
+                    current_time = time.time()
+                    if can_id in self.last_timestamps:
+                        period = current_time - self.last_timestamps[can_id]
+                        freq = 1.0 / period if period > 0 else 0.0
+                    else:
+                        freq = 0.0
+
+                    self.last_timestamps[can_id] = current_time
+                    self.frame_received.emit(can_id, freq, payload)
+                    self.playback_progress.emit(self.playback_index, self.playback_total)
+                    
+                    self.playback_index += 1
 
                 if not self.running or not self.playback_loop:
                     break
+                
+                self.playback_index = 0 # loop reseta
 
             if self.running:
                 self.error_occurred.emit("Reprodução concluída com sucesso.")
@@ -157,6 +174,11 @@ class CANWorker(QThread):
 
     def stop(self):
         self.running = False
+
+    def seek_playback(self, index_pct: int):
+        """Muda a posição para um percentual ou posição."""
+        if self.mode == "PLAYBACK":
+            self.seek_requested = int((index_pct / 100.0) * self.playback_total)
 
     def send_message(self, can_id, data):
         """Injeta um frame no barramento. Em modo simulado, re-emite o sinal."""

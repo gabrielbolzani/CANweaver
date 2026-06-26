@@ -29,7 +29,7 @@ import can
 from PyQt6.QtCore import Qt, QTimer, QDateTime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel,
-    QMessageBox, QInputDialog, QLineEdit, QWidget, QHBoxLayout
+    QMessageBox, QInputDialog, QLineEdit, QWidget, QHBoxLayout, QSlider
 )
 from PyQt6.QtGui import QIcon
 
@@ -39,6 +39,7 @@ from src.annotations import AnnotationManager
 from src.analysis_tab import AnalysisTab
 from src.transmit_tab import TransmitTab
 from src.widgets_tab import WidgetsTab
+from src.import_dialog import ImportDialog
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -120,6 +121,10 @@ class MainWindow(QMainWindow):
         action_open.triggered.connect(self._open_project)
         menu_file.addAction(action_open)
 
+        action_import = QAction("Importar Logs...", self)
+        action_import.triggered.connect(self._import_logs)
+        menu_file.addAction(action_import)
+
         menu_file.addSeparator()
 
         self.action_save = QAction("Salvar Projeto", self)
@@ -162,6 +167,13 @@ class MainWindow(QMainWindow):
             "color: #a1a1aa; font-weight: bold; font-size: 11px; padding: 0 4px;"
         )
 
+        self.playback_slider = QSlider(Qt.Orientation.Horizontal)
+        self.playback_slider.setRange(0, 100)
+        self.playback_slider.setFixedWidth(100)
+        self.playback_slider.setToolTip("Controle de Playback")
+        self.playback_slider.hide()
+        self.playback_slider.sliderMoved.connect(self._on_seek)
+
         self.btn_about = QPushButton("ℹ️")
         self.btn_about.setToolTip("Sobre o CANweaver")
         self.btn_about.clicked.connect(self._show_about)
@@ -172,6 +184,7 @@ class MainWindow(QMainWindow):
         )
 
         corner_layout.addWidget(self.btn_record)
+        corner_layout.addWidget(self.playback_slider)
         corner_layout.addWidget(self.lbl_status)
         corner_layout.addWidget(self.btn_about)
 
@@ -369,6 +382,23 @@ class MainWindow(QMainWindow):
     def _export_project(self):
         self._save_project_as()
 
+    def _import_logs(self):
+        """Abre o diálogo de importação de logs."""
+        dlg = ImportDialog(self)
+        if dlg.exec():
+            # Auto-preparar para simulação diretamente!
+            if hasattr(dlg, 'output_csv') and dlg.output_csv:
+                config = {
+                    "mode": "PLAYBACK",
+                    "interface": "",
+                    "channel": "",
+                    "bitrate": 500000,
+                    "playback_file": dlg.output_csv,
+                    "playback_transmit": False,
+                    "playback_loop": True
+                }
+                self._start_worker(config)
+
     def _load_stylesheet(self):
         qss_path = os.path.join(BASE_DIR, "assets", "style.qss")
         try:
@@ -427,9 +457,25 @@ class MainWindow(QMainWindow):
 
         self.can_thread.frame_received.connect(self.analysis_tab.process_can_frame)
         self.can_thread.error_occurred.connect(self._handle_worker_error)
+        
+        if config["mode"] == "PLAYBACK":
+            self.playback_slider.show()
+            self.can_thread.playback_progress.connect(self._update_slider)
+        else:
+            self.playback_slider.hide()
 
         self.analysis_tab.clear_data()
         self.can_thread.start()
+
+    def _on_seek(self, value):
+        if self.can_thread and self.can_thread.isRunning():
+            self.can_thread.seek_playback(value)
+
+    def _update_slider(self, current, total):
+        # Evita loop de eventos no PyQt com checagem
+        if total > 0 and not self.playback_slider.isSliderDown():
+            pct = int((current / float(total)) * 100)
+            self.playback_slider.setValue(pct)
 
     def _handle_worker_error(self, err_msg: str):
         QMessageBox.warning(self, "Aviso da Thread", err_msg)
