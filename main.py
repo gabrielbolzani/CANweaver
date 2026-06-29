@@ -29,7 +29,8 @@ import can
 from PyQt6.QtCore import Qt, QTimer, QDateTime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel,
-    QMessageBox, QInputDialog, QLineEdit, QWidget, QHBoxLayout, QSlider
+    QMessageBox, QInputDialog, QLineEdit, QWidget, QHBoxLayout, QSlider,
+    QVBoxLayout, QTabWidget
 )
 from PyQt6.QtGui import QIcon
 
@@ -40,6 +41,7 @@ from src.analysis_tab import AnalysisTab
 from src.transmit_tab import TransmitTab
 from src.widgets_tab import WidgetsTab
 from src.import_dialog import ImportDialog
+from src.version import __version__
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -175,13 +177,6 @@ class MainWindow(QMainWindow):
             "color: #a1a1aa; font-weight: bold; font-size: 11px; padding: 0 4px;"
         )
 
-        self.playback_slider = QSlider(Qt.Orientation.Horizontal)
-        self.playback_slider.setRange(0, 100)
-        self.playback_slider.setFixedWidth(100)
-        self.playback_slider.setToolTip("Controle de Playback")
-        self.playback_slider.hide()
-        self.playback_slider.sliderMoved.connect(self._on_seek)
-
         self.btn_about = QPushButton("ℹ️")
         self.btn_about.setToolTip("Sobre o CANweaver")
         self.btn_about.clicked.connect(self._show_about)
@@ -192,18 +187,54 @@ class MainWindow(QMainWindow):
         )
 
         corner_layout.addWidget(self.btn_record)
-        corner_layout.addWidget(self.playback_slider)
         corner_layout.addWidget(self.lbl_status)
         corner_layout.addWidget(self.btn_about)
 
         menubar.setCornerWidget(corner, Qt.Corner.TopRightCorner)
 
-        # ── Abas ───────────────────────────────────────────────────
+        # ── Abas e Player Bar ────────────────────────────────────────────────
         tab_widget = QTabWidget()
         tab_widget.addTab(self.analysis_tab, "Análise (Sniffer)")
         tab_widget.addTab(self.transmit_tab, "Transmitir")
         tab_widget.addTab(self.widgets_tab, "Widgets")
-        self.setCentralWidget(tab_widget)
+        
+        central_master = QWidget()
+        central_layout = QVBoxLayout(central_master)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(tab_widget, 1)
+        
+        # Player Bar
+        self.player_bar = QWidget()
+        self.player_bar.setStyleSheet("background-color: #18181b; border-top: 1px solid #323238;")
+        player_layout = QHBoxLayout(self.player_bar)
+        player_layout.setContentsMargins(15, 8, 15, 8)
+        
+        self.lbl_player_info = QLabel("▶ Reproduzindo:")
+        self.lbl_player_info.setStyleSheet("color: #a1a1aa; font-weight: bold; font-size: 12px; min-width: 150px;")
+        
+        self.playback_slider = QSlider(Qt.Orientation.Horizontal)
+        self.playback_slider.setRange(0, 100)
+        self.playback_slider.setToolTip("Controle de Playback")
+        self.playback_slider.sliderMoved.connect(self._on_seek)
+        self.playback_slider.setStyleSheet("""
+            QSlider::groove:horizontal { border: 1px solid #323238; height: 8px; background: #202024; border-radius: 4px; }
+            QSlider::sub-page:horizontal { background: #3b82f6; border-radius: 4px; }
+            QSlider::handle:horizontal { background: white; border: 1px solid #5c5c5c; width: 14px; margin-top: -3px; margin-bottom: -3px; border-radius: 7px; }
+        """)
+        
+        self.lbl_player_progress = QLabel("0%")
+        self.lbl_player_progress.setStyleSheet("color: white; font-weight: bold; min-width: 40px; margin-left: 8px;")
+        self.lbl_player_progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        
+        player_layout.addWidget(self.lbl_player_info)
+        player_layout.addWidget(self.playback_slider, 1)
+        player_layout.addWidget(self.lbl_player_progress)
+        
+        self.player_bar.hide()
+        central_layout.addWidget(self.player_bar)
+
+        self.setCentralWidget(central_master)
 
     def _show_about(self):
         from src.dialogs import AboutDialog
@@ -236,7 +267,7 @@ class MainWindow(QMainWindow):
         # Reseta o estado do projeto
         self.current_project_path = None
         self.action_save.setEnabled(False)
-        self.setWindowTitle("CANweaver v2.0 - AI Assisted CAN Reverse Engineering")
+        self.setWindowTitle(f"CANweaver v{__version__} - AI Assisted CAN Reverse Engineering")
         self.statusBar().showMessage("Novo projeto criado.", 3000)
 
         # Reiniciar autosave
@@ -255,7 +286,7 @@ class MainWindow(QMainWindow):
         self.current_project_path = path
         self.action_save.setEnabled(True)
         name = os.path.basename(path)
-        self.setWindowTitle(f"CANweaver v2.0 — {name}")
+        self.setWindowTitle(f"CANweaver v{__version__} — {name}")
 
         # Parar autosave e remover temporário se houver um local oficial
         self.autosave_timer.stop()
@@ -515,10 +546,11 @@ class MainWindow(QMainWindow):
         self.can_thread.error_occurred.connect(self._handle_worker_error)
         
         if config["mode"] == "PLAYBACK":
-            self.playback_slider.show()
+            self.player_bar.show()
+            self.lbl_player_info.setText(f"▶ Reproduzindo: {os.path.basename(config['playback_file'])}")
             self.can_thread.playback_progress.connect(self._update_slider)
         else:
-            self.playback_slider.hide()
+            self.player_bar.hide()
 
         self.analysis_tab.clear_data()
         self.can_thread.start()
@@ -532,6 +564,12 @@ class MainWindow(QMainWindow):
         if total > 0 and not self.playback_slider.isSliderDown():
             pct = int((current / float(total)) * 100)
             self.playback_slider.setValue(pct)
+            self.lbl_player_progress.setText(f"{pct}%")
+            
+            if current == 0 and pct == 0:
+                self.lbl_player_info.setText("🔄 Reiniciando (Loop)..." if getattr(self.can_thread, 'playback_loop', False) else "▶ Iniciando...")
+            elif current > 0:
+                self.lbl_player_info.setText(f"▶ {current}/{total} frames")
 
     def _handle_worker_error(self, err_msg: str):
         QMessageBox.warning(self, "Aviso da Thread", err_msg)

@@ -18,12 +18,13 @@ from PyQt6.QtWidgets import (
 class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
+        from src.version import __version__
         self.setWindowTitle("Sobre o CANweaver")
         self.resize(450, 250)
         
         layout = QVBoxLayout(self)
         
-        lbl_title = QLabel("<h2>CANweaver v2.0</h2>")
+        lbl_title = QLabel(f"<h2>CANweaver v{__version__}</h2>")
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         lbl_credits = QLabel(
@@ -43,12 +44,17 @@ class AboutDialog(QDialog):
         lbl_license.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_license.setStyleSheet("color: #a1a1aa; font-size: 13px; margin-top: 15px; border-top: 1px solid #323238; padding-top: 10px;")
         
+        self.btn_update = QPushButton("Verificar Atualizações")
+        self.btn_update.clicked.connect(self._check_updates)
+        self.btn_update.setStyleSheet("background-color: #3b82f6; color: white; padding: 6px; border-radius: 4px;")
+        
         btn_ok = QPushButton("Fechar")
         btn_ok.clicked.connect(self.accept)
-        btn_ok.setStyleSheet("background-color: #2e3035; color: white; padding: 6px; border-radius: 4px; max-width: 100px;")
+        btn_ok.setStyleSheet("background-color: #2e3035; color: white; padding: 6px; border-radius: 4px; min-width: 80px;")
         
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_update)
         btn_layout.addWidget(btn_ok)
         btn_layout.addStretch()
         
@@ -56,6 +62,57 @@ class AboutDialog(QDialog):
         layout.addWidget(lbl_credits)
         layout.addWidget(lbl_license)
         layout.addLayout(btn_layout)
+
+    def _check_updates(self):
+        import urllib.request
+        import json
+        from PyQt6.QtWidgets import QMessageBox, QApplication
+
+        self.btn_update.setText("Verificando...")
+        self.btn_update.setEnabled(False)
+        QApplication.processEvents()
+
+        try:
+            req = urllib.request.Request(
+                "https://api.github.com/repos/gabrielbolzani/CANweaver/releases/latest",
+                headers={"User-Agent": "CANweaver-App"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+                latest_tag = data.get("tag_name", "")
+                
+                from src.version import __version__
+                
+                def parse_ver(v):
+                    return [int(x) for x in v.replace('v', '').split('.') if x.isdigit()]
+                
+                cur_v = parse_ver(f"v{__version__}")
+                lat_v = parse_ver(latest_tag)
+                
+                while len(cur_v) < len(lat_v): cur_v.append(0)
+                while len(lat_v) < len(cur_v): lat_v.append(0)
+                
+                if lat_v > cur_v:
+                    url = data.get("html_url", "https://github.com/gabrielbolzani/CANweaver/releases")
+                    msg = QMessageBox(self)
+                    msg.setWindowTitle("Nova Versão Disponível!")
+                    msg.setText(f"A versão <b>{latest_tag}</b> está disponível no GitHub.<br><br><a href='{url}'>Clique aqui para baixar</a>")
+                    msg.setTextFormat(Qt.TextFormat.RichText)
+                    msg.setOpenExternalLinks(True)
+                    msg.exec()
+                else:
+                    QMessageBox.information(self, "Atualizado", f"Você já está na versão mais recente (v{__version__}).")
+                    
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                QMessageBox.information(self, "Aviso", "Nenhuma release foi publicada neste repositório ainda.")
+            else:
+                QMessageBox.warning(self, "Erro", f"Erro de rede ao verificar atualizações:\n{e}")
+        except Exception as e:
+            QMessageBox.warning(self, "Erro", f"Não foi possível verificar atualizações:\n{e}")
+        finally:
+            self.btn_update.setText("Verificar Atualizações")
+            self.btn_update.setEnabled(True)
 
 
 class ExportDialog(QDialog):
