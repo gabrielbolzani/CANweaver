@@ -158,8 +158,8 @@ class IndicatorDialog(QDialog):
         layout = QFormLayout(self)
 
         self.txt_name = QLineEdit(config.get("name", "Meu Indicador") if config else "Meu Indicador")
-        self.txt_can_id = QLineEdit(config.get("can_id", "0C0") if config else "0C0")
-        self.txt_can_id.setPlaceholderText("ID em HEX (ex: 0C0)")
+        self.txt_can_id = QLineEdit(config.get("can_id", "111") if config else "111")
+        self.txt_can_id.setPlaceholderText("ID em HEX (ex: 111)")
 
         self.sp_byte = QSpinBox()
         self.sp_byte.setRange(0, 7)
@@ -167,7 +167,7 @@ class IndicatorDialog(QDialog):
 
         self.sp_bit = QSpinBox()
         self.sp_bit.setRange(0, 7)
-        self.sp_bit.setValue(config.get("bit", 0) if config else 0)
+        self.sp_bit.setValue(config.get("bit", 1) if config else 1)
 
         self.cb_type = QComboBox()
         self.cb_type.addItems(["LED", "Texto"])
@@ -238,10 +238,16 @@ class IndicatorDialog(QDialog):
 
     def get_config(self):
         is_led = self.cb_type.currentText() == "LED"
+        can_id_text = self.txt_can_id.text().strip()
+        try:
+            can_id_str = f"{int(can_id_text, 16):03X}"
+        except ValueError:
+            can_id_str = can_id_text.upper().replace("0X", "")
+            
         return {
             "type": "indicator",
             "name": self.txt_name.text().strip(),
-            "can_id": self.txt_can_id.text().strip().upper(),
+            "can_id": can_id_str,
             "byte": self.sp_byte.value(),
             "bit": self.sp_bit.value(),
             "visual_type": self.cb_type.currentText(),
@@ -331,10 +337,16 @@ class ControllerDialog(QDialog):
         self.accept()
 
     def get_config(self):
+        can_id_text = self.txt_can_id.text().strip()
+        try:
+            can_id_str = f"{int(can_id_text, 16):03X}"
+        except ValueError:
+            can_id_str = can_id_text.upper().replace("0X", "")
+
         return {
             "type": "controller",
             "name": self.txt_name.text().strip(),
-            "can_id": self.txt_can_id.text().strip().upper(),
+            "can_id": can_id_str,
             "format": self.cb_format.currentText(),
             "payload_on": self.txt_payload_on.text().strip(),
             "payload_off": self.txt_payload_off.text().strip(),

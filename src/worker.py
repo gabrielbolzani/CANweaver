@@ -43,6 +43,7 @@ class CANWorker(QThread):
         self.seek_requested = None
         self.last_timestamps = {}
         self.counters = {0x0C0: 0, 0x180: 0, 0x3F0: 0}
+        self.toggle_111 = False
 
     def run(self):
         self.running = True
@@ -146,7 +147,7 @@ class CANWorker(QThread):
         self.running = False
 
     def _run_simulated(self):
-        target_ids = [0x0C0, 0x180, 0x3F0]
+        target_ids = [0x0C0, 0x180, 0x3F0, 0x111]
         while self.running:
             time.sleep(random.choice([0.01, 0.05, 0.1]))
             can_id = random.choice(target_ids)
@@ -166,6 +167,11 @@ class CANWorker(QThread):
                            0x00, 0x00, 0x00, 0x00, self.counters[0x0C0]]
             elif can_id == 0x180:
                 payload = [0x20, 0x00, random.choice([0x00, 0x01]), 0x00, 0x00, 0x00, 0x00, 0x00]
+            elif can_id == 0x111:
+                self.toggle_111 = not self.toggle_111
+                # Alterna o bit 1 do byte 0 (0x02 = 00000010)
+                val = 0x02 if self.toggle_111 else 0x00
+                payload = [val, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
             else:
                 payload = [random.randint(0x08, 0x0F), random.randint(0x00, 0xFF),
                            0x55, 0xAA, 0x00, 0x00, 0x00, 0x00]
@@ -195,5 +201,15 @@ class CANWorker(QThread):
             try:
                 msg = can.Message(arbitration_id=can_id, data=data, is_extended_id=False)
                 self.bus.send(msg)
+                
+                # Loopback local para atualizar a interface (indicadores)
+                current_time = time.time()
+                if can_id in self.last_timestamps:
+                    period = current_time - self.last_timestamps[can_id]
+                    freq = 1.0 / period if period > 0 else 0.0
+                else:
+                    freq = 0.0
+                self.last_timestamps[can_id] = current_time
+                self.frame_received.emit(can_id, freq, data)
             except Exception as e:
                 print(f"Erro de Tx no Barramento: {e}")

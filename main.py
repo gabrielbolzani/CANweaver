@@ -456,6 +456,7 @@ class MainWindow(QMainWindow):
         self.widgets_tab.can_thread = self.can_thread
 
         self.can_thread.frame_received.connect(self.analysis_tab.process_can_frame)
+        self.can_thread.frame_received.connect(self.widgets_tab._broadcast_can_frame)
         self.can_thread.error_occurred.connect(self._handle_worker_error)
         
         if config["mode"] == "PLAYBACK":

@@ -105,6 +105,7 @@ class IndicatorWidget(DashboardWidget):
         self.update_visuals()
 
     def process_can_frame(self, can_id: int, freq: float, payload: list):
+        # print(f"[IndicatorWidget] Received ID: {can_id:03X}, payload: {payload}, targeting config: {self.config['can_id']}")
         if f"{can_id:03X}" != self.config["can_id"]:
             return
             
@@ -113,6 +114,7 @@ class IndicatorWidget(DashboardWidget):
             bit_idx = self.config["bit"]
             val = payload[byte_idx]
             new_state = (val & (1 << bit_idx)) != 0
+            # print(f"[IndicatorWidget] Matching state change! Old: {self.state}, New: {new_state}")
             if new_state != self.state:
                 self.state = new_state
                 self.update_visuals()
@@ -120,11 +122,13 @@ class IndicatorWidget(DashboardWidget):
     def update_visuals(self):
         is_on = self.state
         val = self.config["val_on"] if is_on else self.config["val_off"]
+        # print(f"[IndicatorWidget] update_visuals called. is_on: {is_on}, val: {val}, type: {self.config['visual_type']}")
         
         if self.config["visual_type"] == "LED":
             color = val if val.startswith("#") else ("#10b981" if is_on else "#52525b")
             self.lbl_display.setText("●")
             self.lbl_display.setStyleSheet(f"color: {color}; font-size: 32px;")
+            # print(f"[IndicatorWidget] Applied stylesheet: color: {color}")
         else:
             self.lbl_display.setText(val)
             self.lbl_display.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
@@ -268,7 +272,10 @@ class WidgetsTab(QWidget):
         menu.exec(self.canvas.mapToGlobal(pos))
 
     def _broadcast_can_frame(self, can_id: int, freq: float, payload: list):
-        for w in self.canvas.findChildren(IndicatorWidget):
+        widgets = self.canvas.findChildren(IndicatorWidget)
+        # if widgets:
+        #     print(f"[WidgetsTab] Broadcasting frame {can_id:03X} to {len(widgets)} widgets")
+        for w in widgets:
             w.process_can_frame(can_id, freq, payload)
 
     def toggle_edit_mode(self, checked):
