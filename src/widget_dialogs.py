@@ -5,7 +5,7 @@ widget_dialogs.py — Diálogos de configuração para os Widgets do Dashboard.
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox,
-    QSpinBox, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QCheckBox,
+    QSpinBox, QDoubleSpinBox, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QCheckBox,
     QColorDialog, QFrame, QSizePolicy
 )
 from PyQt6.QtGui import QColor
@@ -181,24 +181,46 @@ class IndicatorDialog(QDialog):
         layout.addRow("Tipo Visual:", self.cb_type)
 
         # --- Controles de cor (LED) ---
-        init_off = config.get("val_off", "#52525b") if config else "#52525b"
-        init_on  = config.get("val_on",  "#10b981") if config else "#10b981"
+        init_is_led = not config or config.get("visual_type", "LED") == "LED"
+        init_off_color = (config.get("val_off", "#52525b") if config else "#52525b") if not init_is_led or (config and config.get("val_off", "").startswith("#")) else (config.get("val_off", "#52525b") if config else "#52525b")
+        init_on_color  = (config.get("val_on",  "#10b981") if config else "#10b981") if not init_is_led or (config and config.get("val_on",  "").startswith("#")) else (config.get("val_on",  "#10b981") if config else "#10b981")
 
-        self.btn_color_off = _color_preview_btn(init_off, init_off)
+        # Garante valores de cor válidos para o botão de cor
+        if not init_off_color.startswith("#"):
+            init_off_color = "#52525b"
+        if not init_on_color.startswith("#"):
+            init_on_color = "#10b981"
+
+        self.btn_color_off = _color_preview_btn(init_off_color, init_off_color)
         self.btn_color_off.clicked.connect(lambda: self._pick(self.btn_color_off))
 
-        self.btn_color_on = _color_preview_btn(init_on, init_on)
+        self.btn_color_on = _color_preview_btn(init_on_color, init_on_color)
         self.btn_color_on.clicked.connect(lambda: self._pick(self.btn_color_on))
 
+        # Tamanho do LED
+        self.sp_led_size = QSpinBox()
+        self.sp_led_size.setRange(12, 96)
+        self.sp_led_size.setValue(config.get("led_size", 32) if config else 32)
+        self.sp_led_size.setSuffix(" px")
+
         # --- Controles de texto ---
-        self.txt_off = QLineEdit(init_off)
+        # Usa textos padrão quando o tipo é Texto (evita hexadecimais de cor)
+        if config and config.get("visual_type") == "Texto":
+            default_off = config.get("val_off", "DESLIGADO")
+            default_on  = config.get("val_on",  "LIGADO")
+        else:
+            default_off = "DESLIGADO"
+            default_on  = "LIGADO"
+
+        self.txt_off = QLineEdit(default_off)
         self.txt_off.setPlaceholderText("Texto quando DESLIGADO")
-        self.txt_on  = QLineEdit(init_on)
+        self.txt_on  = QLineEdit(default_on)
         self.txt_on.setPlaceholderText("Texto quando LIGADO")
 
         # Guarda referências às labels de formulário para mostrar/ocultar
         layout.addRow("Cor DESLIGADO:", self.btn_color_off)
         layout.addRow("Cor LIGADO:", self.btn_color_on)
+        layout.addRow("Tamanho LED:", self.sp_led_size)
         layout.addRow("Texto DESLIGADO:", self.txt_off)
         layout.addRow("Texto LIGADO:", self.txt_on)
 
@@ -233,6 +255,7 @@ class IndicatorDialog(QDialog):
 
         _set_row_visible(self.btn_color_off, is_led)
         _set_row_visible(self.btn_color_on,  is_led)
+        _set_row_visible(self.sp_led_size,   is_led)
         _set_row_visible(self.txt_off, not is_led)
         _set_row_visible(self.txt_on,  not is_led)
 
@@ -251,6 +274,7 @@ class IndicatorDialog(QDialog):
             "byte": self.sp_byte.value(),
             "bit": self.sp_bit.value(),
             "visual_type": self.cb_type.currentText(),
+            "led_size": self.sp_led_size.value(),
             "val_off": self.btn_color_off._color if is_led else self.txt_off.text().strip(),
             "val_on":  self.btn_color_on._color  if is_led else self.txt_on.text().strip(),
         }
@@ -353,3 +377,144 @@ class ControllerDialog(QDialog):
             "behavior": self.cb_behavior.currentText(),
             "hz": self.sp_hz.value()
         }
+
+
+# ---------------------------------------------------------------------------
+# GaugeDialog
+# ---------------------------------------------------------------------------
+
+class GaugeDialog(QDialog):
+    """Diálogo de configuração para o Gauge (indicador analógico)."""
+
+    def __init__(self, parent=None, config=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configurar Gauge")
+        self.resize(450, 480)
+
+        layout = QFormLayout(self)
+
+        self.txt_name = QLineEdit(config.get("name", "Meu Gauge") if config else "Meu Gauge")
+
+        self.cb_style = QComboBox()
+        self.cb_style.addItems(["Arco", "Barra Horizontal", "Barra Vertical", "Texto Apenas"])
+        self.cb_style.setCurrentText(config.get("style", "Arco") if config else "Arco")
+
+        self.txt_can_id = QLineEdit(config.get("can_id", "111") if config else "111")
+        self.txt_can_id.setPlaceholderText("ID em HEX (ex: 111)")
+
+        self.sp_byte = QSpinBox()
+        self.sp_byte.setRange(0, 7)
+        self.sp_byte.setValue(config.get("byte", 0) if config else 0)
+
+        self.sp_byte_len = QSpinBox()
+        self.sp_byte_len.setRange(1, 4)
+        self.sp_byte_len.setValue(config.get("byte_len", 1) if config else 1)
+        self.sp_byte_len.setToolTip("Número de bytes consecutivos que formam o valor (1–4)")
+
+        self.txt_unit = QLineEdit(config.get("unit", "") if config else "")
+        self.txt_unit.setPlaceholderText("Unidade (ex: km/h, °C, bar)")
+
+        # Raw values (Hex / Int)
+        self.sp_min_raw = QSpinBox()
+        self.sp_min_raw.setRange(-2147483648, 2147483647)
+        self.sp_min_raw.setValue(config.get("val_min_raw", 0) if config else 0)
+
+        self.sp_max_raw = QSpinBox()
+        self.sp_max_raw.setRange(-2147483648, 2147483647)
+        self.sp_max_raw.setValue(config.get("val_max_raw", 255) if config else 255)
+
+        # Converted values (Float)
+        self.sp_min_conv = QDoubleSpinBox()
+        self.sp_min_conv.setRange(-9999999.0, 9999999.0)
+        self.sp_min_conv.setDecimals(4)
+        self.sp_min_conv.setValue(config.get("val_min_conv", 0.0) if config else 0.0)
+
+        self.sp_max_conv = QDoubleSpinBox()
+        self.sp_max_conv.setRange(-9999999.0, 9999999.0)
+        self.sp_max_conv.setDecimals(4)
+        self.sp_max_conv.setValue(config.get("val_max_conv", 100.0) if config else 100.0)
+
+        self.chk_float = QCheckBox("Exibir casas decimais na tela")
+        self.chk_float.setChecked(config.get("show_float", False) if config else False)
+
+        self.lbl_factor = QLabel("Fator: --")
+        self.lbl_factor.setStyleSheet("color: #a1a1aa; font-style: italic;")
+
+        self.sp_size = QSpinBox()
+        self.sp_size.setRange(40, 600)
+        self.sp_size.setValue(config.get("gauge_size", 160) if config else 160)
+        self.sp_size.setSuffix(" px")
+        self.sp_size.setSingleStep(20)
+
+        layout.addRow("Nome:", self.txt_name)
+        layout.addRow("Estilo Visual:", self.cb_style)
+        layout.addRow("ID CAN (HEX):", self.txt_can_id)
+        layout.addRow("Byte Inicial:", self.sp_byte)
+        layout.addRow("Nº de Bytes:", self.sp_byte_len)
+        layout.addRow("Unidade:", self.txt_unit)
+        layout.addRow("Valor Inicial (HEX/INT):", self.sp_min_raw)
+        layout.addRow("Valor Final (HEX/INT):", self.sp_max_raw)
+        layout.addRow("Valor Inicial Convertido:", self.sp_min_conv)
+        layout.addRow("Valor Final Convertido:", self.sp_max_conv)
+        layout.addRow("", self.chk_float)
+        layout.addRow("", self.lbl_factor)
+        layout.addRow("Tamanho do Gauge:", self.sp_size)
+
+        btn_layout = QHBoxLayout()
+        btn_ok = QPushButton("Salvar")
+        btn_ok.clicked.connect(self._validate_and_accept)
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+        layout.addRow(btn_layout)
+
+        self.sp_min_raw.valueChanged.connect(self._update_factor)
+        self.sp_max_raw.valueChanged.connect(self._update_factor)
+        self.sp_min_conv.valueChanged.connect(self._update_factor)
+        self.sp_max_conv.valueChanged.connect(self._update_factor)
+        self._update_factor()
+
+    def _update_factor(self):
+        d_raw = self.sp_max_raw.value() - self.sp_min_raw.value()
+        d_conv = self.sp_max_conv.value() - self.sp_min_conv.value()
+        if d_raw == 0:
+            self.lbl_factor.setText("Fator: N/A (delta zero)")
+        else:
+            self.lbl_factor.setText(f"Fator de conversão: {d_conv / d_raw:.4f}")
+
+    def _validate_and_accept(self):
+        try:
+            int(self.txt_can_id.text().strip(), 16)
+        except ValueError:
+            QMessageBox.warning(self, "Erro", "ID CAN deve ser hexadecimal.")
+            return
+        if self.sp_min_raw.value() == self.sp_max_raw.value():
+            QMessageBox.warning(self, "Erro", "O valor inicial e final raw não podem ser iguais.")
+            return
+        self.accept()
+
+    def get_config(self):
+        can_id_text = self.txt_can_id.text().strip()
+        try:
+            can_id_str = f"{int(can_id_text, 16):03X}"
+        except ValueError:
+            can_id_str = can_id_text.upper().replace("0X", "")
+
+        return {
+            "type": "gauge",
+            "name": self.txt_name.text().strip(),
+            "style": self.cb_style.currentText(),
+            "can_id": can_id_str,
+            "byte": self.sp_byte.value(),
+            "byte_len": self.sp_byte_len.value(),
+            "unit": self.txt_unit.text().strip(),
+            "val_min_raw": self.sp_min_raw.value(),
+            "val_max_raw": self.sp_max_raw.value(),
+            "val_min_conv": self.sp_min_conv.value(),
+            "val_max_conv": self.sp_max_conv.value(),
+            "show_float": self.chk_float.isChecked(),
+            "gauge_size": self.sp_size.value(),
+        }
+
