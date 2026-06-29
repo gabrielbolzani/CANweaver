@@ -87,6 +87,14 @@ class MainWindow(QMainWindow):
         # Caminho do projeto aberto (None = nenhum projeto)
         self.current_project_path = None
 
+        # Autosave
+        self.autosave_path = os.path.join(BASE_DIR, "autosave.cwp")
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.timeout.connect(self._do_autosave)
+        self.autosave_timer.start(30000)  # 30 segundos
+        
+        QTimer.singleShot(0, self._check_autosave)
+
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
@@ -231,6 +239,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("CANweaver v2.0 - AI Assisted CAN Reverse Engineering")
         self.statusBar().showMessage("Novo projeto criado.", 3000)
 
+        # Reiniciar autosave
+        if os.path.exists(self.autosave_path):
+            try:
+                os.remove(self.autosave_path)
+            except Exception:
+                pass
+        self.autosave_timer.start(30000)
+
     # ------------------------------------------------------------------
     # Projeto: Salvar / Abrir
     # ------------------------------------------------------------------
@@ -240,6 +256,40 @@ class MainWindow(QMainWindow):
         self.action_save.setEnabled(True)
         name = os.path.basename(path)
         self.setWindowTitle(f"CANweaver v2.0 — {name}")
+
+        # Parar autosave e remover temporário se houver um local oficial
+        self.autosave_timer.stop()
+        if os.path.exists(self.autosave_path):
+            try:
+                os.remove(self.autosave_path)
+            except Exception:
+                pass
+
+    def _check_autosave(self):
+        if os.path.exists(self.autosave_path):
+            mtime = os.path.getmtime(self.autosave_path)
+            dt = QDateTime.fromSecsSinceEpoch(int(mtime)).toString("dd/MM/yyyy hh:mm")
+            reply = QMessageBox.question(
+                self, "Recuperação Automática",
+                f"Foi detectado um projeto não salvo com modificações de {dt}.\n\nDeseja continuar de onde parou?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._load_project_file(self.autosave_path, is_autosave=True)
+            else:
+                try:
+                    os.remove(self.autosave_path)
+                except Exception:
+                    pass
+
+    def _do_autosave(self):
+        if not self.current_project_path:
+            sel = {"annotations": True, "transmit": True, "dashboard": True}
+            try:
+                self._write_project(self.autosave_path, sel)
+            except Exception:
+                pass
 
     def _collect_project_data(self):
         """Coleta os dados de todas as abas para montar o pacote."""
@@ -341,18 +391,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao salvar:\n{e}")
 
-    def _open_project(self):
-        """Abre um .cwp e restaura o estado de todas as abas."""
-        from PyQt6.QtWidgets import QFileDialog
+    def _load_project_file(self, file_path: str, is_autosave=False):
         import json, zipfile
-
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Abrir Projeto", "",
-            "CANweaver Project (*.cwp);;Arquivos ZIP (*.zip)"
-        )
-        if not file_path:
-            return
-
         try:
             with zipfile.ZipFile(file_path, 'r') as zipf:
                 names = zipf.namelist()
@@ -372,11 +412,26 @@ class MainWindow(QMainWindow):
                     layout = json.loads(zipf.read("dashboard_layout.json").decode("utf-8"))
                     self.widgets_tab.import_data(layout)
 
-            self._set_project_path(file_path)
-            QMessageBox.information(self, "Projeto Aberto",
-                                    f"Projeto carregado:\n{os.path.basename(file_path)}")
+            if not is_autosave:
+                self._set_project_path(file_path)
+                QMessageBox.information(self, "Projeto Aberto", f"Projeto carregado:\n{os.path.basename(file_path)}")
+            else:
+                self.statusBar().showMessage("Projeto recuperado com sucesso.", 5000)
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao abrir projeto:\n{e}")
+            QMessageBox.critical(self, "Erro", f"Erro ao carregar projeto:\n{e}")
+
+    def _open_project(self):
+        """Abre um .cwp e restaura o estado de todas as abas."""
+        from PyQt6.QtWidgets import QFileDialog
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Abrir Projeto", "",
+            "CANweaver Project (*.cwp);;Arquivos ZIP (*.zip)"
+        )
+        if not file_path:
+            return
+
+        self._load_project_file(file_path, is_autosave=False)
 
     # Manter compatibilidade com chamada antiga (se houver)
     def _export_project(self):
