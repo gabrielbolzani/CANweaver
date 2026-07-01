@@ -31,6 +31,7 @@ class CANWorker(QThread):
     frame_received = pyqtSignal(int, float, list)
     error_occurred = pyqtSignal(str)
     playback_progress = pyqtSignal(int, int)
+    error_frame_received = pyqtSignal(int, str, str)  # can_id, error_type, description
 
     def __init__(self):
         super().__init__()
@@ -66,6 +67,12 @@ class CANWorker(QThread):
                     current_time = time.time()
                     can_id = msg.arbitration_id
 
+                    # Separar error frames — não poluir a aba de Análise
+                    if msg.is_error_frame:
+                        err_type, err_desc = self._decode_error_frame(can_id, msg)
+                        self.error_frame_received.emit(can_id, err_type, err_desc)
+                        continue
+
                     if can_id in self.last_timestamps:
                         period = current_time - self.last_timestamps[can_id]
                         freq = 1.0 / period if period > 0 else 0.0
@@ -77,6 +84,35 @@ class CANWorker(QThread):
         except Exception as e:
             self.error_occurred.emit(f"Erro no barramento CAN: {e}")
             self.running = False
+
+    @staticmethod
+    def _decode_error_frame(can_id: int, msg) -> tuple:
+        """Decodifica um error frame do SocketCAN e retorna (tipo, descrição)."""
+        # Os bits do arbitration_id em error frames carregam flags de erro
+        arb = can_id
+
+        if arb & 0x0001:  # CAN_ERR_TX_TIMEOUT
+            return "TX Timeout", "Frame de transmissão expirou sem ACK"
+        if arb & 0x0004:  # CAN_ERR_LOSTARB
+            return "Lost Arbitration", "Perda de arbitragem no barramento"
+        if arb & 0x0008:  # CAN_ERR_CRTL
+            return "Controller Error", "Erro interno do controlador CAN"
+        if arb & 0x0010:  # CAN_ERR_PROT
+            return "Protocol Violation", "Violação de protocolo CAN detectada"
+        if arb & 0x0020:  # CAN_ERR_TRX
+            return "Transceiver Error", "Erro no transceiver / hardware físico"
+        if arb & 0x0040:  # CAN_ERR_ACK
+            return "No ACK", "Nenhum nó reconheceu o frame (sem ACK)"
+        if arb & 0x0080:  # CAN_ERR_BUSOFF
+            return "Bus-Off", "Controlador entrou em estado Bus-Off"
+        if arb & 0x0100:  # CAN_ERR_BUSERROR
+            return "Bus Error", "Erro detectado no barramento CAN"
+        if arb & 0x0200:  # CAN_ERR_RESTARTED
+            return "Bus Restarted", "Controlador reiniciado após Bus-Off"
+
+        # Sem flag específica reconhecida
+        data_hex = " ".join(f"{b:02X}" for b in msg.data) if msg.data else ""
+        return "Error Frame", f"Frame de erro genérico (ID={can_id:#05x}, data={data_hex})"
 
     def _run_playback(self):
         try:

@@ -37,7 +37,8 @@ class DashboardWidget(QWidget):
         self.config = config
         self.edit_mode = False
         self._drag_start_pos = None
-        self.edit_callback = None  # Definido por WidgetsTab ao posicionar o widget
+        self.edit_callback = None       # Definido por WidgetsTab ao posicionar o widget
+        self.duplicate_callback = None  # Definido por WidgetsTab ao posicionar o widget
 
     def set_edit_mode(self, enabled):
         self.edit_mode = enabled
@@ -79,9 +80,12 @@ class DashboardWidget(QWidget):
             )
             action_edit = QAction("✏️ Editar Widget", self)
             action_edit.triggered.connect(lambda: self.edit_callback(self) if self.edit_callback else None)
+            action_dup = QAction("📋 Duplicar Widget", self)
+            action_dup.triggered.connect(lambda: self.duplicate_callback(self) if self.duplicate_callback else None)
             action_del = QAction("🗑 Excluir Widget", self)
             action_del.triggered.connect(self.deleteLater)
             menu.addAction(action_edit)
+            menu.addAction(action_dup)
             menu.addSeparator()
             menu.addAction(action_del)
             menu.exec(event.globalPos())
@@ -566,6 +570,7 @@ class WidgetsTab(QWidget):
 
     def _place_widget(self, w: DashboardWidget, pos):
         w.edit_callback = self._edit_widget
+        w.duplicate_callback = self._duplicate_widget
         w.show()
         w.move(pos)
         w.set_edit_mode(self.edit_mode)
@@ -609,6 +614,34 @@ class WidgetsTab(QWidget):
             else:
                 return
             self._place_widget(new_w, pos)
+
+    def _duplicate_widget(self, widget: DashboardWidget):
+        """Cria uma cópia do widget com as mesmas configurações, deslocada 20 px."""
+        import copy
+        new_cfg = copy.deepcopy(widget.config)
+        wtype = new_cfg.get("type", "")
+
+        # Acrescenta ' (1)' no campo de texto/nome visível
+        for key in ("text", "name"):
+            if key in new_cfg:
+                new_cfg[key] = new_cfg[key] + " (1)"
+                break
+
+        # Posição deslocada para ficar visível ao lado do original
+        new_pos = QPoint(widget.pos().x() + 20, widget.pos().y() + 20)
+
+        if wtype == "label":
+            new_w = LabelWidget(self.canvas, new_cfg)
+        elif wtype == "indicator":
+            new_w = IndicatorWidget(self.canvas, new_cfg)
+        elif wtype == "controller":
+            new_w = ControllerWidget(self.canvas, new_cfg, self.can_thread)
+        elif wtype == "gauge":
+            new_w = GaugeWidget(self.canvas, new_cfg)
+        else:
+            return
+
+        self._place_widget(new_w, new_pos)
 
     def export_data(self):
         widgets_data = []

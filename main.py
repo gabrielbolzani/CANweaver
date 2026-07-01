@@ -40,6 +40,7 @@ from src.annotations import AnnotationManager
 from src.analysis_tab import AnalysisTab
 from src.transmit_tab import TransmitTab
 from src.widgets_tab import WidgetsTab
+from src.error_tab import ErrorTab
 from src.import_dialog import ImportDialog
 from src.version import __version__
 
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
         self.analysis_tab = AnalysisTab(self.annotation_manager, self.can_thread)
         self.transmit_tab = TransmitTab(self.can_thread)
         self.widgets_tab = WidgetsTab(self.can_thread)
+        self.error_tab = ErrorTab()
 
         # Conectar sinal CAN → análise
         self.can_thread.frame_received.connect(self.analysis_tab.process_can_frame)
@@ -155,6 +157,13 @@ class MainWindow(QMainWindow):
         action_connect.triggered.connect(self._open_connection_dialog)
         menu_conn.addAction(action_connect)
 
+        menu_conn.addSeparator()
+
+        action_clear_stale = QAction("🧹  Limpar IDs Inativos...", self)
+        action_clear_stale.setToolTip("Remove da tabela os IDs que não estão mais sendo transmitidos (sem frames há mais de 5 s)")
+        action_clear_stale.triggered.connect(self._clear_stale_ids)
+        menu_conn.addAction(action_clear_stale)
+
         # ── Corner widget: Gravar | Status | Sobre ────────────────────
         corner = QWidget()
         corner.setStyleSheet("background-color: #202024;")
@@ -197,6 +206,7 @@ class MainWindow(QMainWindow):
         tab_widget.addTab(self.analysis_tab, "Análise (Sniffer)")
         tab_widget.addTab(self.transmit_tab, "Transmitir")
         tab_widget.addTab(self.widgets_tab, "Widgets")
+        tab_widget.addTab(self.error_tab, "⚠️ Erros CAN")
         
         central_master = QWidget()
         central_layout = QVBoxLayout(central_master)
@@ -501,6 +511,14 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self._start_worker(dialog.get_config())
 
+    def _clear_stale_ids(self):
+        """Remove os IDs sem atividade recente da aba de análise."""
+        removed = self.analysis_tab.clear_stale_ids(timeout_s=5.0)
+        if removed == 0:
+            self.statusBar().showMessage("Nenhum ID inativo encontrado (timeout: 5 s).", 4000)
+        else:
+            self.statusBar().showMessage(f"{removed} ID(s) inativo(s) removido(s) da tabela.", 4000)
+
     def _start_worker(self, config: dict):
         if self.can_thread and self.can_thread.isRunning():
             self.can_thread.stop()
@@ -544,6 +562,7 @@ class MainWindow(QMainWindow):
         self.can_thread.frame_received.connect(self.analysis_tab.process_can_frame)
         self.can_thread.frame_received.connect(self.widgets_tab._broadcast_can_frame)
         self.can_thread.error_occurred.connect(self._handle_worker_error)
+        self.can_thread.error_frame_received.connect(self.error_tab.add_error_frame)
         
         if config["mode"] == "PLAYBACK":
             self.player_bar.show()

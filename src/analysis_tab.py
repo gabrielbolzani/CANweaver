@@ -449,3 +449,41 @@ class AnalysisTab(QWidget):
         self.can_database.clear()
         self.table_model.removeRows(0, self.table_model.rowCount())
         self.list_ids.clear()
+
+    def clear_stale_ids(self, timeout_s: float = 5.0):
+        """Remove da tabela os IDs que não receberam frames há mais de timeout_s segundos."""
+        current_time = time.time()
+
+        # Identifica quais IDs estão velhos
+        stale_ids = [
+            hex_id for hex_id, info in self.can_database.items()
+            if (current_time - max(info["last_change_time"])) > timeout_s
+        ]
+
+        if not stale_ids:
+            return 0
+
+        # Ordena pelos índices de linha em ordem DECRESCENTE para remover sem
+        # invalidar os índices das linhas anteriores.
+        stale_ids.sort(key=lambda h: self.can_database[h]["row_index"], reverse=True)
+
+        for hex_id in stale_ids:
+            info = self.can_database.pop(hex_id)
+            row_idx = info["row_index"]
+
+            # Remove da tabela
+            self.table_model.removeRow(row_idx)
+
+            # Remove do list widget
+            for i in range(self.list_ids.count()):
+                item = self.list_ids.item(i)
+                if item and item.data(Qt.ItemDataRole.UserRole) == hex_id:
+                    self.list_ids.takeItem(i)
+                    break
+
+            # Ajusta o row_index dos IDs que ficaram abaixo da linha removida
+            for other_info in self.can_database.values():
+                if other_info["row_index"] > row_idx:
+                    other_info["row_index"] -= 1
+
+        return len(stale_ids)

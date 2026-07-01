@@ -42,4 +42,4 @@ Você precisa dizer a ele qual é a versão. Siga o passo a passo:
    (se tiver) e publique!
 """
 
-__version__ = "0.1.5"
+__version__ = "0.2.0"
