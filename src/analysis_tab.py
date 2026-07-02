@@ -91,10 +91,14 @@ class AnalysisTab(QWidget):
         self.lbl_busload = QLabel("Busload: ---%")
         self.lbl_busload.setStyleSheet("color: #10b981; font-weight: bold; margin-left: 20px;")
 
+        self.lbl_errors = QLabel("Erros CAN: 0")
+        self.lbl_errors.setStyleSheet("color: #e83f5b; font-weight: bold; margin-left: 20px;")
+
         control_layout.addWidget(self.btn_format)
         control_layout.addWidget(self.chk_fade)
         control_layout.addWidget(self.chk_hide_static)
         control_layout.addWidget(self.lbl_busload)
+        control_layout.addWidget(self.lbl_errors)
         control_layout.addStretch()
         left_layout.addLayout(control_layout)
 
@@ -169,6 +173,13 @@ class AnalysisTab(QWidget):
     # ------------------------------------------------------------------
     # Slots de dados CAN
     # ------------------------------------------------------------------
+    @pyqtSlot(int, str, str)
+    def on_error_frame(self, can_id: int, error_type: str, description: str):
+        if not hasattr(self, '_error_count'):
+            self._error_count = 0
+        self._error_count += 1
+        self.lbl_errors.setText(f"Erros CAN: {self._error_count}")
+
     @pyqtSlot(int, float, list)
     def process_can_frame(self, can_id: int, frequency: float, payload: list):
         bits = (44 + 8 * len(payload)) * 1.2
@@ -449,6 +460,8 @@ class AnalysisTab(QWidget):
         self.can_database.clear()
         self.table_model.removeRows(0, self.table_model.rowCount())
         self.list_ids.clear()
+        self._error_count = 0
+        self.lbl_errors.setText("Erros CAN: 0")
 
     def clear_stale_ids(self, timeout_s: float = 5.0):
         """Remove da tabela os IDs que não receberam frames há mais de timeout_s segundos."""

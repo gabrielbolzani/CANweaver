@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox,
     QSpinBox, QDoubleSpinBox, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QCheckBox,
-    QColorDialog, QFrame, QSizePolicy
+    QColorDialog, QFrame, QSizePolicy, QWidget
 )
 from PyQt6.QtGui import QColor
 
@@ -446,6 +446,10 @@ class GaugeDialog(QDialog):
         self.sp_size.setSuffix(" px")
         self.sp_size.setSingleStep(20)
 
+        self.chk_invert = QCheckBox("Inverter direção de crescimento")
+        self.chk_invert.setChecked(config.get("invert_direction", False) if config else False)
+        self.chk_invert.setToolTip("Inverte o sentido do preenchimento gráfico (o valor numérico não muda)")
+
         layout.addRow("Nome:", self.txt_name)
         layout.addRow("Estilo Visual:", self.cb_style)
         layout.addRow("ID CAN (HEX):", self.txt_can_id)
@@ -459,6 +463,7 @@ class GaugeDialog(QDialog):
         layout.addRow("", self.chk_float)
         layout.addRow("", self.lbl_factor)
         layout.addRow("Tamanho do Gauge:", self.sp_size)
+        layout.addRow("", self.chk_invert)
 
         btn_layout = QHBoxLayout()
         btn_ok = QPushButton("Salvar")
@@ -516,5 +521,284 @@ class GaugeDialog(QDialog):
             "val_max_conv": self.sp_max_conv.value(),
             "show_float": self.chk_float.isChecked(),
             "gauge_size": self.sp_size.value(),
+            "invert_direction": self.chk_invert.isChecked(),
         }
 
+
+
+# ---------------------------------------------------------------------------
+# MultiIndicatorDialog  (Beta)
+# ---------------------------------------------------------------------------
+
+def _parse_pattern(pattern_str: str, fmt: str) -> list:
+    """
+    Converte string de padrao em lista de 8 itens (int ou None = don't care).
+    Exemplo HEX: '01 xx FF xx xx xx xx xx'  -> [1, None, 255, None, None, None, None, None]
+    Exemplo BIN: '00000001 xxxxxxxx ...'    -> [1, None, ...]
+    """
+    parts = pattern_str.strip().split()
+    result = []
+    for p in parts[:8]:
+        if all(c in ('x', 'X', '?', '-') for c in p) and len(p) > 0:
+            result.append(None)
+        else:
+            try:
+                result.append(int(p, 16 if fmt == 'HEX' else 2))
+            except ValueError:
+                result.append(None)
+    while len(result) < 8:
+        result.append(None)
+    return result
+
+
+def _format_pattern(pattern: list, fmt: str) -> str:
+    """Converte lista interna -> string legivel para o campo de texto."""
+    parts = []
+    for v in pattern:
+        if v is None:
+            parts.append('xx' if fmt == 'HEX' else 'xxxxxxxx')
+        else:
+            parts.append(f'{v:02X}' if fmt == 'HEX' else f'{v:08b}')
+    return ' '.join(parts)
+
+
+class _StateRow:
+    """Agrupa os widgets de uma linha de estado no MultiIndicatorDialog."""
+
+    def __init__(self, parent_layout, label: str, color: str,
+                 pattern: list, fmt: str):
+        self.fmt = fmt
+        self.destroyed = False
+
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 2, 0, 2)
+        row_layout.setSpacing(6)
+
+        self.txt_label = QLineEdit(label)
+        self.txt_label.setPlaceholderText('Nome do estado')
+        self.txt_label.setFixedWidth(110)
+
+        self.btn_color = _color_preview_btn(color, color)
+        self.btn_color.setFixedWidth(80)
+        self.btn_color.clicked.connect(lambda: self._pick_color())
+
+        self.txt_pattern = QLineEdit(_format_pattern(pattern, fmt))
+        self.txt_pattern.setPlaceholderText('ex: 01 xx xx xx xx xx xx xx')
+        self.txt_pattern.setToolTip(
+            "Define quais bytes devem ser verificados.\n"
+            "'xx' = qualquer valor (don't care).\n"
+            "Exemplo HEX: 01 xx FF xx xx xx xx xx\n"
+            "Exemplo BIN: 00000001 xxxxxxxx xxxxxxxx ...\n"
+            "O primeiro estado que casar com o payload recebido e exibido."
+        )
+
+        btn_del = QPushButton('x')
+        btn_del.setFixedSize(26, 26)
+        btn_del.setStyleSheet(
+            'QPushButton { background-color: #7f1d1d; color: white; border-radius: 4px; }'
+            'QPushButton:hover { background-color: #b91c1c; }'
+        )
+        btn_del.clicked.connect(lambda: self._remove(row_widget, parent_layout))
+
+        row_layout.addWidget(self.txt_label)
+        row_layout.addWidget(self.btn_color)
+        row_layout.addWidget(self.txt_pattern, 1)
+        row_layout.addWidget(btn_del)
+
+        self.row_widget = row_widget
+        parent_layout.addWidget(row_widget)
+
+    def _pick_color(self):
+        _open_color_picker(self.btn_color)
+        self.btn_color.setText(self.btn_color._color)
+
+    def _remove(self, widget, layout):
+        self.destroyed = True
+        layout.removeWidget(widget)
+        widget.deleteLater()
+
+    def update_format(self, new_fmt: str):
+        if self.destroyed:
+            return
+        old_pattern = _parse_pattern(self.txt_pattern.text(), self.fmt)
+        self.fmt = new_fmt
+        self.txt_pattern.setText(_format_pattern(old_pattern, new_fmt))
+
+    def get_state(self) -> dict:
+        return {
+            'label': self.txt_label.text().strip(),
+            'color': self.btn_color._color,
+            'pattern': _parse_pattern(self.txt_pattern.text(), self.fmt),
+        }
+
+    def is_alive_and_valid(self) -> bool:
+        return (not self.destroyed) and bool(self.txt_label.text().strip())
+
+
+class MultiIndicatorDialog(QDialog):
+    """
+    Dialogo para o Indicador Multi-Estado (Beta).
+
+    Permite criar N estados com nome, cor e padrao de bytes.
+    Suporta HEX e BIN. 'xx' / 'xxxxxxxx' = don't care (byte ignorado na comparacao).
+    O primeiro estado cujo padrao casar com o payload recebido e exibido.
+    """
+
+    def __init__(self, parent=None, config=None):
+        super().__init__(parent)
+        self.setWindowTitle('Configurar Indicador Multi-Estado (Beta)')
+        self.resize(640, 540)
+        self._state_rows = []
+        self._fmt = config.get('pattern_format', 'HEX') if config else 'HEX'
+
+        outer = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.txt_name = QLineEdit(config.get('name', 'Indicador') if config else 'Indicador')
+        self.txt_can_id = QLineEdit(config.get('can_id', '100') if config else '100')
+        self.txt_can_id.setPlaceholderText('ID em HEX (ex: 100)')
+
+        self.cb_visual = QComboBox()
+        self.cb_visual.addItems(['LED', 'Texto'])
+        if config and config.get('visual_type') == 'Texto':
+            self.cb_visual.setCurrentText('Texto')
+
+        self.sp_led_size = QSpinBox()
+        self.sp_led_size.setRange(12, 96)
+        self.sp_led_size.setValue(config.get('led_size', 32) if config else 32)
+        self.sp_led_size.setSuffix(' px')
+
+        self.cb_fmt = QComboBox()
+        self.cb_fmt.addItems(['HEX', 'BIN'])
+        self.cb_fmt.setCurrentText(self._fmt)
+        self.cb_fmt.currentTextChanged.connect(self._on_fmt_changed)
+
+        default_lbl   = config.get('default_label', '??') if config else '??'
+        default_color = config.get('default_color', '#52525b') if config else '#52525b'
+        self.txt_default_label = QLineEdit(default_lbl)
+        self.txt_default_label.setPlaceholderText('Texto quando nenhum estado casa')
+        self.btn_default_color = _color_preview_btn(default_color, default_color)
+        self.btn_default_color.setFixedWidth(80)
+        self.btn_default_color.clicked.connect(lambda: self._pick_default_color())
+
+        default_row_layout = QHBoxLayout()
+        default_row_layout.addWidget(self.txt_default_label)
+        default_row_layout.addWidget(self.btn_default_color)
+
+        form.addRow('Nome:', self.txt_name)
+        form.addRow('ID CAN (HEX):', self.txt_can_id)
+        form.addRow('Tipo Visual:', self.cb_visual)
+        form.addRow('Tamanho LED:', self.sp_led_size)
+        form.addRow('Formato do padrao:', self.cb_fmt)
+        form.addRow('Estado padrao (label + cor):', default_row_layout)
+        outer.addLayout(form)
+
+        hdr_layout = QHBoxLayout()
+        lbl_h = QLabel('Estados  (ordem importa: primeiro que casar e exibido)')
+        lbl_h.setStyleSheet('font-weight: bold; margin-top: 6px;')
+        tip = QLabel("  xx = don't care")
+        tip.setStyleSheet('color: #a1a1aa; font-size: 11px;')
+        hdr_layout.addWidget(lbl_h)
+        hdr_layout.addWidget(tip)
+        hdr_layout.addStretch()
+        outer.addLayout(hdr_layout)
+
+        col_hdr = QHBoxLayout()
+        for txt, fixed in [('Nome', 110), ('Cor', 80), ('Padrao de bytes (B0 B1 B2 B3 B4 B5 B6 B7)', -1), ('', 26)]:
+            lbl = QLabel(txt)
+            lbl.setStyleSheet('color: #71717a; font-size: 10px;')
+            if fixed > 0:
+                lbl.setFixedWidth(fixed)
+            col_hdr.addWidget(lbl, 0 if fixed > 0 else 1)
+        outer.addLayout(col_hdr)
+
+        self.states_area = QVBoxLayout()
+        self.states_area.setSpacing(2)
+        states_container = QWidget()
+        states_container.setLayout(self.states_area)
+        outer.addWidget(states_container, 1)
+
+        if config and config.get('states'):
+            for st in config['states']:
+                self._add_state_row(st.get('label', ''), st.get('color', '#10b981'),
+                                    st.get('pattern', [None]*8))
+        else:
+            self._add_state_row('Estado 0', '#52525b', [0] + [None]*7)
+            self._add_state_row('Estado 1', '#10b981', [1] + [None]*7)
+
+        btn_add = QPushButton('+ Adicionar Estado')
+        btn_add.setStyleSheet(
+            'QPushButton { background-color: #1e3a5f; color: white; padding: 5px 14px;'
+            ' border-radius: 4px; }'
+            'QPushButton:hover { background-color: #1d4ed8; }'
+        )
+        btn_add.clicked.connect(lambda: self._add_state_row('Novo Estado', '#3b82f6', [None]*8))
+        outer.addWidget(btn_add)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet('color: #323238;')
+        outer.addWidget(sep)
+
+        btn_row = QHBoxLayout()
+        btn_ok = QPushButton('Salvar')
+        btn_ok.clicked.connect(self._validate_and_accept)
+        btn_cancel = QPushButton('Cancelar')
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_ok)
+        btn_row.addWidget(btn_cancel)
+        outer.addLayout(btn_row)
+
+        self.cb_visual.currentTextChanged.connect(self._update_led_visibility)
+        self._update_led_visibility(self.cb_visual.currentText())
+
+    def _add_state_row(self, label: str, color: str, pattern: list):
+        row = _StateRow(self.states_area, label, color, pattern, self._fmt)
+        self._state_rows.append(row)
+
+    def _pick_default_color(self):
+        _open_color_picker(self.btn_default_color, self)
+        self.btn_default_color.setText(self.btn_default_color._color)
+
+    def _on_fmt_changed(self, new_fmt: str):
+        self._fmt = new_fmt
+        for row in self._state_rows:
+            row.update_format(new_fmt)
+
+    def _update_led_visibility(self, visual_type: str):
+        self.sp_led_size.setVisible(visual_type == 'LED')
+
+    def _validate_and_accept(self):
+        try:
+            int(self.txt_can_id.text().strip(), 16)
+        except ValueError:
+            QMessageBox.warning(self, 'Erro', 'ID CAN deve ser hexadecimal.')
+            return
+        valid = [r for r in self._state_rows if r.is_alive_and_valid()]
+        if not valid:
+            QMessageBox.warning(self, 'Erro',
+                                'Adicione pelo menos um estado com nome preenchido.')
+            return
+        self.accept()
+
+    def get_config(self) -> dict:
+        can_id_text = self.txt_can_id.text().strip()
+        try:
+            can_id_str = f'{int(can_id_text, 16):03X}'
+        except ValueError:
+            can_id_str = can_id_text.upper().replace('0X', '')
+
+        valid = [r for r in self._state_rows if r.is_alive_and_valid()]
+        return {
+            'type': 'multi_indicator',
+            'name': self.txt_name.text().strip(),
+            'can_id': can_id_str,
+            'visual_type': self.cb_visual.currentText(),
+            'led_size': self.sp_led_size.value(),
+            'pattern_format': self._fmt,
+            'states': [r.get_state() for r in valid],
+            'default_label': self.txt_default_label.text().strip(),
+            'default_color': self.btn_default_color._color,
+        }

@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QAction, QColor, QPainter, QPen, QBrush, QFont
 import math
 
-from src.widget_dialogs import LabelDialog, IndicatorDialog, ControllerDialog, GaugeDialog
+from src.widget_dialogs import LabelDialog, IndicatorDialog, ControllerDialog, GaugeDialog, MultiIndicatorDialog
 
 class CanvasWidget(QFrame):
     """Canvas com opção de grade para auxiliar no posicionamento."""
@@ -160,6 +160,69 @@ class IndicatorWidget(DashboardWidget):
 
 
 
+class MultiIndicatorWidget(DashboardWidget):
+    def __init__(self, parent, config):
+        super().__init__(parent, config)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.lbl_title = QLabel(config["name"])
+        self.lbl_title.setStyleSheet("color: #a1a1aa; font-size: 11px;")
+        self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.lbl_display = QLabel()
+        self.lbl_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        layout.addWidget(self.lbl_title)
+        layout.addWidget(self.lbl_display)
+        
+        self.current_state_idx = -1
+        self.update_visuals()
+
+    def process_can_frame(self, can_id: int, freq: float, payload: list):
+        if f"{can_id:03X}" != self.config["can_id"]:
+            return
+            
+        matched_idx = -1
+        states = self.config.get("states", [])
+        
+        for i, st in enumerate(states):
+            pattern = st.get("pattern", [])
+            match = True
+            for j, p_val in enumerate(pattern):
+                if p_val is not None and j < len(payload):
+                    if payload[j] != p_val:
+                        match = False
+                        break
+            if match:
+                matched_idx = i
+                break
+                
+        if matched_idx != self.current_state_idx:
+            self.current_state_idx = matched_idx
+            self.update_visuals()
+
+    def update_visuals(self):
+        if self.current_state_idx >= 0:
+            states = self.config.get("states", [])
+            st = states[self.current_state_idx]
+            val = st.get("label", "")
+            color = st.get("color", "#ffffff")
+        else:
+            val = self.config.get("default_label", "??")
+            color = self.config.get("default_color", "#52525b")
+            
+        if self.config.get("visual_type") == "LED":
+            if not color.startswith("#"):
+                color = "#52525b"
+            led_size = self.config.get("led_size", 32)
+            self.lbl_display.setText("●")
+            self.lbl_display.setStyleSheet(f"color: {color}; font-size: {led_size}px;")
+        else:
+            self.lbl_display.setText(val)
+            self.lbl_display.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
+
+
 class GaugeWidget(DashboardWidget):
     """Indicador analógico tipo gauge com arco de progresso ou barras."""
 
@@ -167,7 +230,11 @@ class GaugeWidget(DashboardWidget):
         super().__init__(parent, config)
         self._raw_value = config.get("val_min_raw", 0)
         size = config.get("gauge_size", 160)
-        self.setFixedSize(size, size + 30)
+        style = config.get("style", "Arco")
+        if style == "Barra Horizontal":
+            self.setFixedSize(size, max(60, size // 3) + 30)
+        else:
+            self.setFixedSize(size, size + 30)
 
     def _get_conv_value(self):
         v_min = self.config.get("val_min_raw", 0)
@@ -248,41 +315,53 @@ class GaugeWidget(DashboardWidget):
         font_name = QFont()
         font_name.setPixelSize(max(8, size // 14))
         painter.setFont(font_name)
-        painter.drawText(0, size + 4, size, 24,
-                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, name)
+        if style == "Barra Horizontal":
+            widget_h = max(60, size // 3)
+            painter.drawText(0, widget_h + 4, size, 24, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, name)
+        else:
+            painter.drawText(0, size + 4, size, 24, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, name)
+            
+        invert = self.config.get("invert_direction", False)
 
         if style == "Arco":
-            margin = 10
+            margin = max(10, size // 15)
             cx = size // 2
             cy = size // 2
             radius = (size // 2) - margin
+            pen_width = max(6, size // 12)
 
             # Arco de fundo
-            pen_bg = QPen(QColor("#3f3f46"), 12, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            pen_bg = QPen(QColor("#3f3f46"), pen_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
             painter.setPen(pen_bg)
             start_angle = 225 * 16
             span_angle  = -270 * 16
             painter.drawArc(cx - radius, margin, radius * 2, radius * 2, start_angle, span_angle)
 
             # Arco de valor
-            pen_val = QPen(bar_color, 12, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            pen_val = QPen(bar_color, pen_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
             painter.setPen(pen_val)
-            painter.drawArc(cx - radius, margin, radius * 2, radius * 2,
-                            start_angle, int(span_angle * ratio))
+            if invert:
+                painter.drawArc(cx - radius, margin, radius * 2, radius * 2,
+                                start_angle + span_angle, -int(span_angle * ratio))
+                angle_deg = 225 - 270 + ratio * 270
+            else:
+                painter.drawArc(cx - radius, margin, radius * 2, radius * 2,
+                                start_angle, int(span_angle * ratio))
+                angle_deg = 225 - ratio * 270
 
             # Ponteiro
-            angle_deg = 225 - ratio * 270
             angle_rad = math.radians(angle_deg)
-            needle_len = radius - 18
+            needle_len = radius - pen_width - (size // 20)
             nx = cx + needle_len * math.cos(angle_rad)
             ny = cy - needle_len * math.sin(angle_rad)
-            painter.setPen(QPen(QColor("#ffffff"), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.setPen(QPen(QColor("#ffffff"), max(2, size // 50), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.drawLine(int(cx), int(cy), int(nx), int(ny))
 
             # Ponto central
             painter.setBrush(QBrush(QColor("#a1a1aa")))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(cx - 5, cy - 5, 10, 10)
+            center_dot = max(6, size // 15)
+            painter.drawEllipse(cx - center_dot // 2, cy - center_dot // 2, center_dot, center_dot)
 
             # Valor numérico
             painter.setPen(QColor("#ffffff"))
@@ -307,7 +386,8 @@ class GaugeWidget(DashboardWidget):
 
         elif style == "Barra Horizontal":
             bar_h = max(20, size // 6)
-            bar_y = (size - bar_h) // 2
+            widget_h = max(60, size // 3)
+            bar_y = (widget_h - bar_h) // 2
             painter.setBrush(QBrush(QColor("#3f3f46")))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(10, bar_y, size - 20, bar_h, 4, 4)
@@ -315,7 +395,10 @@ class GaugeWidget(DashboardWidget):
             w_fill = int((size - 20) * ratio)
             if w_fill > 0:
                 painter.setBrush(QBrush(bar_color))
-                painter.drawRoundedRect(10, bar_y, w_fill, bar_h, 4, 4)
+                if invert:
+                    painter.drawRoundedRect(10 + (size - 20) - w_fill, bar_y, w_fill, bar_h, 4, 4)
+                else:
+                    painter.drawRoundedRect(10, bar_y, w_fill, bar_h, 4, 4)
 
             painter.setPen(QColor("#ffffff"))
             font_val = QFont()
@@ -338,7 +421,10 @@ class GaugeWidget(DashboardWidget):
             h_fill = int(bar_h * ratio)
             if h_fill > 0:
                 painter.setBrush(QBrush(bar_color))
-                painter.drawRoundedRect(bar_x, bar_y + bar_h - h_fill, bar_w, h_fill, 4, 4)
+                if invert:
+                    painter.drawRoundedRect(bar_x, bar_y, bar_w, h_fill, 4, 4)
+                else:
+                    painter.drawRoundedRect(bar_x, bar_y + bar_h - h_fill, bar_w, h_fill, 4, 4)
 
             painter.setPen(QColor("#ffffff"))
             font_val = QFont()
@@ -492,6 +578,9 @@ class WidgetsTab(QWidget):
         
         action_ind = QAction("💡 Inserir Indicador", self)
         action_ind.triggered.connect(lambda: self.add_indicator(pos))
+
+        action_multi = QAction("🚥 Inserir Ind. Multi-Estado", self)
+        action_multi.triggered.connect(lambda: self.add_multi_indicator(pos))
         
         action_ctrl = QAction("🎛️ Inserir Controlador", self)
         action_ctrl.triggered.connect(lambda: self.add_controller(pos))
@@ -501,6 +590,7 @@ class WidgetsTab(QWidget):
         
         menu.addAction(action_label)
         menu.addAction(action_ind)
+        menu.addAction(action_multi)
         menu.addAction(action_ctrl)
         menu.addAction(action_gauge)
         
@@ -511,6 +601,8 @@ class WidgetsTab(QWidget):
         # if widgets:
         #     print(f"[WidgetsTab] Broadcasting frame {can_id:03X} to {len(widgets)} widgets")
         for w in widgets:
+            w.process_can_frame(can_id, freq, payload)
+        for w in self.canvas.findChildren(MultiIndicatorWidget):
             w.process_can_frame(can_id, freq, payload)
         for w in self.canvas.findChildren(GaugeWidget):
             w.process_can_frame(can_id, freq, payload)
@@ -554,6 +646,13 @@ class WidgetsTab(QWidget):
             w = IndicatorWidget(self.canvas, cfg)
             self._place_widget(w, pos)
 
+    def add_multi_indicator(self, pos):
+        dlg = MultiIndicatorDialog(self)
+        if dlg.exec():
+            cfg = dlg.get_config()
+            w = MultiIndicatorWidget(self.canvas, cfg)
+            self._place_widget(w, pos)
+
     def add_controller(self, pos):
         dlg = ControllerDialog(self)
         if dlg.exec():
@@ -585,7 +684,7 @@ class WidgetsTab(QWidget):
 
     def _edit_widget(self, widget: DashboardWidget):
         """Abre o diálogo de edição para o widget selecionado."""
-        from src.widget_dialogs import LabelDialog, IndicatorDialog, ControllerDialog
+        from src.widget_dialogs import LabelDialog, IndicatorDialog, ControllerDialog, GaugeDialog, MultiIndicatorDialog
         wtype = widget.config.get("type", "")
         pos = widget.pos()
 
@@ -593,6 +692,8 @@ class WidgetsTab(QWidget):
             dlg = LabelDialog(self, config=widget.config)
         elif wtype == "indicator":
             dlg = IndicatorDialog(self, config=widget.config)
+        elif wtype == "multi_indicator":
+            dlg = MultiIndicatorDialog(self, config=widget.config)
         elif wtype == "controller":
             dlg = ControllerDialog(self, config=widget.config)
         elif wtype == "gauge":
@@ -607,6 +708,8 @@ class WidgetsTab(QWidget):
                 new_w = LabelWidget(self.canvas, new_cfg)
             elif wtype == "indicator":
                 new_w = IndicatorWidget(self.canvas, new_cfg)
+            elif wtype == "multi_indicator":
+                new_w = MultiIndicatorWidget(self.canvas, new_cfg)
             elif wtype == "controller":
                 new_w = ControllerWidget(self.canvas, new_cfg, self.can_thread)
             elif wtype == "gauge":
@@ -634,6 +737,8 @@ class WidgetsTab(QWidget):
             new_w = LabelWidget(self.canvas, new_cfg)
         elif wtype == "indicator":
             new_w = IndicatorWidget(self.canvas, new_cfg)
+        elif wtype == "multi_indicator":
+            new_w = MultiIndicatorWidget(self.canvas, new_cfg)
         elif wtype == "controller":
             new_w = ControllerWidget(self.canvas, new_cfg, self.can_thread)
         elif wtype == "gauge":
@@ -664,6 +769,8 @@ class WidgetsTab(QWidget):
                 widget = LabelWidget(self.canvas, cfg)
             elif wtype == "indicator":
                 widget = IndicatorWidget(self.canvas, cfg)
+            elif wtype == "multi_indicator":
+                widget = MultiIndicatorWidget(self.canvas, cfg)
             elif wtype == "controller":
                 widget = ControllerWidget(self.canvas, cfg, self.can_thread)
             elif wtype == "gauge":

@@ -22,6 +22,7 @@ import random
 import csv
 import can
 from PyQt6.QtCore import QThread, pyqtSignal
+from src.simulator import CANSimulator
 
 
 class CANWorker(QThread):
@@ -183,36 +184,20 @@ class CANWorker(QThread):
         self.running = False
 
     def _run_simulated(self):
-        target_ids = [0x0C0, 0x180, 0x3F0, 0x111]
+        simulator = CANSimulator(self._emit_simulated_frame)
         while self.running:
-            time.sleep(random.choice([0.01, 0.05, 0.1]))
-            can_id = random.choice(target_ids)
-            current_time = time.time()
+            simulator.step()
 
-            if can_id in self.last_timestamps:
-                period = current_time - self.last_timestamps[can_id]
-                freq = 1.0 / period if period > 0 else 0.0
-            else:
-                freq = random.uniform(10.0, 80.0)
-
-            self.last_timestamps[can_id] = current_time
-
-            if can_id == 0x0C0:
-                self.counters[0x0C0] = (self.counters[0x0C0] + 1) % 16
-                payload = [0x01, random.randint(0x00, 0xFF), random.randint(0x00, 0x02),
-                           0x00, 0x00, 0x00, 0x00, self.counters[0x0C0]]
-            elif can_id == 0x180:
-                payload = [0x20, 0x00, random.choice([0x00, 0x01]), 0x00, 0x00, 0x00, 0x00, 0x00]
-            elif can_id == 0x111:
-                self.toggle_111 = not self.toggle_111
-                # Alterna o bit 1 do byte 0 (0x02 = 00000010)
-                val = 0x02 if self.toggle_111 else 0x00
-                payload = [val, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-            else:
-                payload = [random.randint(0x08, 0x0F), random.randint(0x00, 0xFF),
-                           0x55, 0xAA, 0x00, 0x00, 0x00, 0x00]
-
-            self.frame_received.emit(can_id, freq, payload)
+    def _emit_simulated_frame(self, can_id: int, payload: list):
+        """Callback chamado pelo CANSimulator: calcula frequência e emite o sinal Qt."""
+        current_time = time.time()
+        if can_id in self.last_timestamps:
+            period = current_time - self.last_timestamps[can_id]
+            freq = 1.0 / period if period > 0 else 0.0
+        else:
+            freq = 0.0
+        self.last_timestamps[can_id] = current_time
+        self.frame_received.emit(can_id, freq, payload)
 
     def stop(self):
         self.running = False

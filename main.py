@@ -563,6 +563,7 @@ class MainWindow(QMainWindow):
         self.can_thread.frame_received.connect(self.widgets_tab._broadcast_can_frame)
         self.can_thread.error_occurred.connect(self._handle_worker_error)
         self.can_thread.error_frame_received.connect(self.error_tab.add_error_frame)
+        self.can_thread.error_frame_received.connect(self.analysis_tab.on_error_frame)
         
         if config["mode"] == "PLAYBACK":
             self.player_bar.show()
