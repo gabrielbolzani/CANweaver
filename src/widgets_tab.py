@@ -93,13 +93,34 @@ class DashboardWidget(QWidget):
             super().contextMenuEvent(event)
 
 
+def normalize_can_id(val) -> int:
+    """Converte ID CAN (int, hex str com ou sem 0x, decimal) para int de forma segura."""
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str):
+        val = val.strip()
+        if not val:
+            return -1
+        try:
+            return int(val, 16)
+        except ValueError:
+            try:
+                return int(val, 10)
+            except ValueError:
+                return -1
+    return -1
+
+
 class LabelWidget(DashboardWidget):
     def __init__(self, parent, config):
         super().__init__(parent, config)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
-        self.lbl = QLabel(config["text"])
-        size = config.get("size", 14)
+        self.lbl = QLabel(str(config.get("text", "")))
+        try:
+            size = int(config.get("size", 14))
+        except (ValueError, TypeError):
+            size = 14
         bold = "font-weight: bold;" if config.get("bold", False) else ""
         italic = "font-style: italic;" if config.get("italic", False) else ""
         strike = "text-decoration: line-through;" if config.get("strikethrough", False) else ""
@@ -111,10 +132,27 @@ class LabelWidget(DashboardWidget):
 class IndicatorWidget(DashboardWidget):
     def __init__(self, parent, config):
         super().__init__(parent, config)
+        self.target_can_id = normalize_can_id(self.config.get("can_id"))
+        try:
+            self.config["byte"] = int(self.config.get("byte", 0))
+        except (ValueError, TypeError):
+            self.config["byte"] = 0
+        try:
+            self.config["bit"] = int(self.config.get("bit", 0))
+        except (ValueError, TypeError):
+            self.config["bit"] = 0
+        self.config["visual_type"] = self.config.get("visual_type", "LED")
+        self.config["val_off"] = str(self.config.get("val_off", "#52525b"))
+        self.config["val_on"] = str(self.config.get("val_on", "#10b981"))
+        try:
+            self.config["led_size"] = int(self.config.get("led_size", 32))
+        except (ValueError, TypeError):
+            self.config["led_size"] = 32
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         
-        self.lbl_title = QLabel(config["name"])
+        self.lbl_title = QLabel(str(self.config.get("name", "")))
         self.lbl_title.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
@@ -128,33 +166,29 @@ class IndicatorWidget(DashboardWidget):
         self.update_visuals()
 
     def process_can_frame(self, can_id: int, freq: float, payload: list):
-        # print(f"[IndicatorWidget] Received ID: {can_id:03X}, payload: {payload}, targeting config: {self.config['can_id']}")
-        if f"{can_id:03X}" != self.config["can_id"]:
+        if can_id != self.target_can_id:
             return
             
-        byte_idx = self.config["byte"]
+        byte_idx = self.config.get("byte", 0)
         if byte_idx < len(payload):
-            bit_idx = self.config["bit"]
+            bit_idx = self.config.get("bit", 0)
             val = payload[byte_idx]
             new_state = (val & (1 << bit_idx)) != 0
-            # print(f"[IndicatorWidget] Matching state change! Old: {self.state}, New: {new_state}")
             if new_state != self.state:
                 self.state = new_state
                 self.update_visuals()
 
     def update_visuals(self):
         is_on = self.state
-        val = self.config["val_on"] if is_on else self.config["val_off"]
-        # print(f"[IndicatorWidget] update_visuals called. is_on: {is_on}, val: {val}, type: {self.config['visual_type']}")
+        val = self.config.get("val_on", "#10b981") if is_on else self.config.get("val_off", "#52525b")
         
-        if self.config["visual_type"] == "LED":
-            color = val if val.startswith("#") else ("#10b981" if is_on else "#52525b")
+        if self.config.get("visual_type") == "LED":
+            color = val if isinstance(val, str) and val.startswith("#") else ("#10b981" if is_on else "#52525b")
             led_size = self.config.get("led_size", 32)
             self.lbl_display.setText("●")
             self.lbl_display.setStyleSheet(f"color: {color}; font-size: {led_size}px;")
-            # print(f"[IndicatorWidget] Applied stylesheet: color: {color}")
         else:
-            self.lbl_display.setText(val)
+            self.lbl_display.setText(str(val))
             self.lbl_display.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
 
 
@@ -163,10 +197,39 @@ class IndicatorWidget(DashboardWidget):
 class MultiIndicatorWidget(DashboardWidget):
     def __init__(self, parent, config):
         super().__init__(parent, config)
+        self.target_can_id = normalize_can_id(self.config.get("can_id"))
+        self.config["visual_type"] = self.config.get("visual_type", "LED")
+        try:
+            self.config["led_size"] = int(self.config.get("led_size", 32))
+        except (ValueError, TypeError):
+            self.config["led_size"] = 32
+
+        # Normaliza padrões de estados
+        raw_states = self.config.get("states", [])
+        normalized_states = []
+        for st in raw_states:
+            pat = []
+            for p in st.get("pattern", []):
+                if p is None or p == "" or str(p).lower() in ("xx", "x", "?", "-", "none", "null"):
+                    pat.append(None)
+                else:
+                    try:
+                        if isinstance(p, int):
+                            pat.append(p)
+                        else:
+                            p_str = str(p).strip()
+                            pat.append(int(p_str, 16 if "0x" in p_str or any(c in 'abcdefABCDEF' for c in p_str) else 10))
+                    except Exception:
+                        pat.append(None)
+            st_dict = dict(st)
+            st_dict["pattern"] = pat
+            normalized_states.append(st_dict)
+        self.config["states"] = normalized_states
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         
-        self.lbl_title = QLabel(config["name"])
+        self.lbl_title = QLabel(str(self.config.get("name", "")))
         self.lbl_title.setStyleSheet("color: #a1a1aa; font-size: 11px;")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
@@ -180,7 +243,7 @@ class MultiIndicatorWidget(DashboardWidget):
         self.update_visuals()
 
     def process_can_frame(self, can_id: int, freq: float, payload: list):
-        if f"{can_id:03X}" != self.config["can_id"]:
+        if can_id != self.target_can_id:
             return
             
         matched_idx = -1
@@ -213,13 +276,13 @@ class MultiIndicatorWidget(DashboardWidget):
             color = self.config.get("default_color", "#52525b")
             
         if self.config.get("visual_type") == "LED":
-            if not color.startswith("#"):
+            if not isinstance(color, str) or not color.startswith("#"):
                 color = "#52525b"
             led_size = self.config.get("led_size", 32)
             self.lbl_display.setText("●")
             self.lbl_display.setStyleSheet(f"color: {color}; font-size: {led_size}px;")
         else:
-            self.lbl_display.setText(val)
+            self.lbl_display.setText(str(val))
             self.lbl_display.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
 
 
@@ -228,19 +291,51 @@ class GaugeWidget(DashboardWidget):
 
     def __init__(self, parent, config):
         super().__init__(parent, config)
-        self._raw_value = config.get("val_min_raw", 0)
-        size = config.get("gauge_size", 160)
-        style = config.get("style", "Arco")
+        self.target_can_id = normalize_can_id(self.config.get("can_id"))
+        try:
+            self.config["byte"] = int(self.config.get("byte", 0))
+        except (ValueError, TypeError):
+            self.config["byte"] = 0
+        try:
+            self.config["byte_len"] = int(self.config.get("byte_len", 1))
+        except (ValueError, TypeError):
+            self.config["byte_len"] = 1
+        try:
+            self.config["val_min_raw"] = float(self.config.get("val_min_raw", 0))
+        except (ValueError, TypeError):
+            self.config["val_min_raw"] = 0.0
+        try:
+            self.config["val_max_raw"] = float(self.config.get("val_max_raw", 255))
+        except (ValueError, TypeError):
+            self.config["val_max_raw"] = 255.0
+        try:
+            self.config["val_min_conv"] = float(self.config.get("val_min_conv", 0.0))
+        except (ValueError, TypeError):
+            self.config["val_min_conv"] = 0.0
+        try:
+            self.config["val_max_conv"] = float(self.config.get("val_max_conv", 100.0))
+        except (ValueError, TypeError):
+            self.config["val_max_conv"] = 100.0
+        try:
+            self.config["gauge_size"] = int(self.config.get("gauge_size", 160))
+        except (ValueError, TypeError):
+            self.config["gauge_size"] = 160
+        self.config["show_float"] = bool(self.config.get("show_float", False))
+        self.config["invert_direction"] = bool(self.config.get("invert_direction", False))
+
+        self._raw_value = self.config["val_min_raw"]
+        size = self.config["gauge_size"]
+        style = self.config.get("style", "Arco")
         if style == "Barra Horizontal":
             self.setFixedSize(size, max(60, size // 3) + 30)
         else:
             self.setFixedSize(size, size + 30)
 
     def _get_conv_value(self):
-        v_min = self.config.get("val_min_raw", 0)
-        v_max = self.config.get("val_max_raw", 255)
-        c_min = self.config.get("val_min_conv", 0.0)
-        c_max = self.config.get("val_max_conv", 100.0)
+        v_min = self.config["val_min_raw"]
+        v_max = self.config["val_max_raw"]
+        c_min = self.config["val_min_conv"]
+        c_max = self.config["val_max_conv"]
 
         if v_max == v_min:
             return c_min
@@ -249,22 +344,21 @@ class GaugeWidget(DashboardWidget):
         return c_min + ratio * (c_max - c_min)
 
     def process_can_frame(self, can_id: int, freq: float, payload: list):
-        if f"{can_id:03X}" != self.config["can_id"]:
+        if can_id != self.target_can_id:
             return
         byte_idx = self.config["byte"]
-        byte_len = self.config.get("byte_len", 1)
+        byte_len = self.config["byte_len"]
         if byte_idx + byte_len - 1 < len(payload):
             raw = 0
             for i in range(byte_len):
                 raw = (raw << 8) | payload[byte_idx + i]
             
             # Clamp raw value
-            v_min = self.config.get("val_min_raw", 0)
-            v_max = self.config.get("val_max_raw", 255)
-            # handle cases where min > max in raw configuration
+            v_min = self.config["val_min_raw"]
+            v_max = self.config["val_max_raw"]
             real_min = min(v_min, v_max)
             real_max = max(v_min, v_max)
-            raw = max(real_min, min(real_max, raw))
+            raw = max(real_min, min(real_max, float(raw)))
 
             if raw != self._raw_value:
                 self._raw_value = raw
@@ -445,18 +539,18 @@ class GaugeWidget(DashboardWidget):
 
 
 class ControllerWidget(DashboardWidget):
-    def __init__(self, parent, config, can_thread):
+    def __init__(self, parent, config, can_thread=None):
         super().__init__(parent, config)
-        self.can_thread = can_thread
+        self._can_thread = can_thread
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         
-        self.btn = QPushButton(config["name"])
+        self.btn = QPushButton(str(config.get("name", "Botão")))
         self.btn.setStyleSheet("background-color: #4e44dd; color: white; padding: 10px; border-radius: 4px; font-weight: bold;")
         layout.addWidget(self.btn)
         
-        b = config["behavior"]
+        b = str(config.get("behavior", ""))
         if "Pulso (Apenas Click" in b:
             self.btn.clicked.connect(self._send_on)
         elif "Segurar (Ao apertar" in b:
@@ -476,34 +570,52 @@ class ControllerWidget(DashboardWidget):
             self.timer.timeout.connect(self._send_on)
             self.btn.toggled.connect(self._on_toggle_continuous)
 
+    @property
+    def can_thread(self):
+        parent = self.parent()
+        while parent is not None:
+            if hasattr(parent, "can_thread") and parent.can_thread is not None:
+                return parent.can_thread
+            parent = parent.parent()
+        return self._can_thread
+
     def _parse_payload(self, text):
-        fmt = self.config["format"]
-        parts = text.strip().split()
+        fmt = self.config.get("format", "HEX")
+        parts = str(text).strip().split()
         return [int(p, 16) if fmt == "HEX" else int(p, 2) for p in parts]
 
     def _send(self, payload_str):
-        if not self.can_thread or self.can_thread.mode == "IDLE":
+        worker = self.can_thread
+        if not worker or worker.mode == "IDLE":
             return
         try:
-            can_id = int(self.config["can_id"], 16)
+            can_id = normalize_can_id(self.config.get("can_id"))
+            if can_id < 0:
+                return
             data = self._parse_payload(payload_str)
-            self.can_thread.send_message(can_id, data)
+            worker.send_message(can_id, data)
         except Exception:
             pass
 
     def _send_on(self):
-        self._send(self.config["payload_on"])
+        self._send(self.config.get("payload_on", ""))
 
     def _send_off(self):
-        self._send(self.config["payload_off"])
+        self._send(self.config.get("payload_off", ""))
 
     def _start_continuous(self):
         self._send_on()
         hz = self.config.get("hz", 10)
-        self.timer.start(int(1000 / hz))
+        try:
+            hz = max(1, int(hz))
+        except Exception:
+            hz = 10
+        if hasattr(self, 'timer'):
+            self.timer.start(int(1000 / hz))
 
     def _stop_continuous(self):
-        self.timer.stop()
+        if hasattr(self, 'timer'):
+            self.timer.stop()
         self._send_off()
 
     def _on_toggle_single(self, checked):
@@ -528,13 +640,22 @@ class WidgetsTab(QWidget):
 
     def __init__(self, can_thread_ref, parent=None):
         super().__init__(parent)
-        self.can_thread = can_thread_ref
+        self._can_thread = can_thread_ref
         self.edit_mode = False
         self.widgets_list = []
         
         # Conecta o frame_received ao método global de broadcast
-        self.can_thread.frame_received.connect(self._broadcast_can_frame)
+        if self._can_thread:
+            self._can_thread.frame_received.connect(self._broadcast_can_frame)
         self._build_ui()
+
+    @property
+    def can_thread(self):
+        return self._can_thread
+
+    @can_thread.setter
+    def can_thread(self, new_worker):
+        self._can_thread = new_worker
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -597,15 +718,12 @@ class WidgetsTab(QWidget):
         menu.exec(self.canvas.mapToGlobal(pos))
 
     def _broadcast_can_frame(self, can_id: int, freq: float, payload: list):
-        widgets = self.canvas.findChildren(IndicatorWidget)
-        # if widgets:
-        #     print(f"[WidgetsTab] Broadcasting frame {can_id:03X} to {len(widgets)} widgets")
-        for w in widgets:
-            w.process_can_frame(can_id, freq, payload)
-        for w in self.canvas.findChildren(MultiIndicatorWidget):
-            w.process_can_frame(can_id, freq, payload)
-        for w in self.canvas.findChildren(GaugeWidget):
-            w.process_can_frame(can_id, freq, payload)
+        for w in self.canvas.findChildren(DashboardWidget):
+            if hasattr(w, "process_can_frame"):
+                try:
+                    w.process_can_frame(can_id, freq, payload)
+                except Exception:
+                    pass
 
     def toggle_edit_mode(self, checked):
         self.edit_mode = checked
@@ -763,7 +881,7 @@ class WidgetsTab(QWidget):
         for w in self.canvas.findChildren(DashboardWidget):
             w.deleteLater()
         for cfg in widgets_data:
-            pos = QPoint(cfg.get("pos_x", 20), cfg.get("pos_y", 20))
+            pos = QPoint(int(cfg.get("pos_x", 20)), int(cfg.get("pos_y", 20)))
             wtype = cfg.get("type", "")
             if wtype == "label":
                 widget = LabelWidget(self.canvas, cfg)

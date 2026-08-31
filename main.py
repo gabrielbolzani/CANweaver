@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QIcon
 
 from src.worker import CANWorker
-from src.dialogs import ConnectionDialog, AboutDialog
+from src.dialogs import ConnectionDialog, AboutDialog, BusDiscoveryDialog, bring_up_socketcan
 from src.annotations import AnnotationManager
 from src.analysis_tab import AnalysisTab
 from src.transmit_tab import TransmitTab
@@ -156,6 +156,10 @@ class MainWindow(QMainWindow):
         action_connect = QAction("🔌  Conectar ao Barramento...", self)
         action_connect.triggered.connect(self._open_connection_dialog)
         menu_conn.addAction(action_connect)
+
+        action_autodetect = QAction("🔍  Descobrir Barramento (Auto-Baudrate)...", self)
+        action_autodetect.triggered.connect(self._open_bus_discovery_dialog)
+        menu_conn.addAction(action_autodetect)
 
         menu_conn.addSeparator()
 
@@ -511,6 +515,13 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self._start_worker(dialog.get_config())
 
+    def _open_bus_discovery_dialog(self):
+        dialog = BusDiscoveryDialog(self)
+        if dialog.exec():
+            cfg = dialog.get_config()
+            if cfg:
+                self._start_worker(cfg)
+
     def _clear_stale_ids(self):
         """Remove os IDs sem atividade recente da aba de análise."""
         removed = self.analysis_tab.clear_stale_ids(timeout_s=5.0)
@@ -532,6 +543,8 @@ class MainWindow(QMainWindow):
             self.can_thread.playback_loop = config["playback_loop"]
 
         if config["mode"] == "HARDWARE":
+            if config.get("interface") == "socketcan":
+                bring_up_socketcan(config.get("channel", "can0"), config.get("bitrate", 500000), listen_only=False)
             try:
                 self.can_thread.bus = can.Bus(
                     interface=config["interface"],
