@@ -30,7 +30,7 @@ from PyQt6.QtCore import Qt, QTimer, QDateTime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel,
     QMessageBox, QInputDialog, QLineEdit, QWidget, QHBoxLayout, QSlider,
-    QVBoxLayout, QTabWidget
+    QVBoxLayout, QTabWidget, QDockWidget
 )
 from PyQt6.QtGui import QIcon
 
@@ -42,6 +42,7 @@ from src.transmit_tab import TransmitTab
 from src.widgets_tab import WidgetsTab
 from src.error_tab import ErrorTab
 from src.import_dialog import ImportDialog
+from src.ai_assistant.ai_panel import CANCopilotPanel
 from src.version import __version__
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +76,12 @@ class MainWindow(QMainWindow):
         self.transmit_tab = TransmitTab(self.can_thread)
         self.widgets_tab = WidgetsTab(self.can_thread)
         self.error_tab = ErrorTab()
+
+        # CAN Copilot (Assistente IA)
+        self.copilot_panel = CANCopilotPanel(self.can_thread, self.annotation_manager, self)
+        self.copilot_panel.create_widget_requested.connect(self._on_ai_create_widget)
+        self.copilot_panel.apply_filter_requested.connect(self._on_ai_apply_filter)
+        self.copilot_panel.update_doc_requested.connect(self._on_ai_update_doc)
 
         # Conectar sinal CAN → análise
         self.can_thread.frame_received.connect(self.analysis_tab.process_can_frame)
@@ -168,6 +175,32 @@ class MainWindow(QMainWindow):
         action_clear_stale.triggered.connect(self._clear_stale_ids)
         menu_conn.addAction(action_clear_stale)
 
+        # ── Menu CAN Copilot (IA) ────────────────────────────────────
+        menu_ai = menubar.addMenu("🤖 CAN Copilot")
+
+        self.copilot_dock = QDockWidget("CAN Copilot (Assistente IA)", self)
+        self.copilot_dock.setObjectName("CANCopilotDock")
+        self.copilot_dock.setWidget(self.copilot_panel)
+        self.copilot_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.copilot_dock)
+        self.copilot_dock.hide()
+
+        action_toggle_copilot = self.copilot_dock.toggleViewAction()
+        action_toggle_copilot.setText("💬  Exibir / Ocultar Painel do Copilot")
+        action_toggle_copilot.setShortcut("Ctrl+I")
+        menu_ai.addAction(action_toggle_copilot)
+
+        menu_ai.addSeparator()
+
+        action_ai_config = QAction("🔑  Configurar Chave de API & Modelo...", self)
+        action_ai_config.triggered.connect(self._open_ai_config_dialog)
+        menu_ai.addAction(action_ai_config)
+
+        action_clear_ai = QAction("🧹  Limpar Contexto da Conversa", self)
+        action_clear_ai.triggered.connect(self.copilot_panel.clear_context)
+        menu_ai.addAction(action_clear_ai)
+
+
         # ── Corner widget: Gravar | Status | Sobre ────────────────────
         corner = QWidget()
         corner.setStyleSheet("background-color: #202024;")
@@ -254,6 +287,29 @@ class MainWindow(QMainWindow):
         from src.dialogs import AboutDialog
         dlg = AboutDialog(self)
         dlg.exec()
+
+    # ------------------------------------------------------------------
+    # CAN Copilot (Ações de IA)
+    # ------------------------------------------------------------------
+    def _open_ai_config_dialog(self):
+        from src.ai_assistant.ai_dialogs import AIConfigDialog
+        dlg = AIConfigDialog(self)
+        if dlg.exec():
+            if hasattr(self.copilot_panel, "_update_model_badge"):
+                self.copilot_panel._update_model_badge()
+
+    def _on_ai_create_widget(self, widget_cfg: dict):
+        self.widgets_tab.add_widget_from_config(widget_cfg)
+        self.statusBar().showMessage(f"CAN Copilot: Widget '{widget_cfg.get('name', '')}' adicionado ao Dashboard.", 4000)
+
+    def _on_ai_apply_filter(self, filter_ids: str):
+        self.analysis_tab.apply_id_filter(filter_ids)
+        self.statusBar().showMessage(f"CAN Copilot: Filtro '{filter_ids}' aplicado.", 4000)
+
+    def _on_ai_update_doc(self, new_content: str):
+        self.annotation_manager.append_raw_markdown(new_content)
+        self.statusBar().showMessage("CAN Copilot: Documentação do projeto atualizada.", 4000)
+
 
     # ------------------------------------------------------------------
     # Novo Projeto

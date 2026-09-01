@@ -17,3 +17,11 @@ env/
 # Arquivos de projeto e anotações do usuário (não devem ir ao git)
 CANweaver_Projeto.md
 *.cwp
+
+# Configurações locais de IA, Chaves e Tokens (Segurança)
+ai_config.json
+*.key
+*.token
+.canweaver/
+ai_history.json
+

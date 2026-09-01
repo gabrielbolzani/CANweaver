@@ -1595,4 +1595,31 @@ class WidgetsTab(QWidget):
                 continue
             self._place_widget(widget, pos)
 
+    def add_widget_from_config(self, cfg: dict):
+        """Insere um novo widget no Canvas a partir de um dicionário de configuração (usado pelo CAN Copilot)."""
+        wtype = cfg.get("type", "gauge")
+        existing = self.canvas.findChildren(DashboardWidget)
+        pos = QPoint(min(600, 40 + len(existing) * 20), min(400, 40 + len(existing) * 20))
+
+        if wtype == "label":
+            widget = LabelWidget(self.canvas, cfg)
+        elif wtype == "indicator":
+            widget = IndicatorWidget(self.canvas, cfg)
+        elif wtype == "multi_indicator":
+            widget = MultiIndicatorWidget(self.canvas, cfg)
+        elif wtype == "controller":
+            widget = ControllerWidget(self.canvas, cfg, self.can_thread)
+        elif wtype == "incremental_controller":
+            widget = IncrementalControllerWidget(self.canvas, cfg, self.can_thread)
+        elif wtype == "gauge":
+            widget = GaugeWidget(self.canvas, cfg)
+        elif wtype == "terminal":
+            widget = TerminalWidget(self.canvas, cfg)
+        else:
+            return None
+
+        self._place_widget(widget, pos)
+        return widget
+
+
 

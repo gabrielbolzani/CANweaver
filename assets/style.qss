@@ -87,3 +87,18 @@ QLabel {
     font-size: 14px;
     font-weight: 500;
 }
+
+/* Dock Widget Styling */
+QDockWidget {
+    color: #e1e1e6;
+    font-weight: bold;
+}
+
+QDockWidget::title {
+    background-color: #18181b;
+    padding: 6px;
+    border: 1px solid #29292e;
+    border-bottom: 2px solid #38bdf8;
+    text-align: left;
+}
+

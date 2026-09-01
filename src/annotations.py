@@ -83,6 +83,16 @@ class AnnotationManager:
             f.write(f"{text}\n")
         self._save_to_dict(target, text)
 
+    def append_raw_markdown(self, markdown_text: str):
+        """Acrescenta texto Markdown gerado pela IA ou usuário diretamente ao arquivo de projeto."""
+        if not markdown_text:
+            return
+        with open(self.filename, "a", encoding="utf-8") as f:
+            timestamp = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
+            f.write(f"\n\n<!-- Adicionado via CAN Copilot em {timestamp} -->\n")
+            f.write(f"{markdown_text.strip()}\n")
+        self.load()
+
     def _save_to_dict(self, target: str, comment: str):
         if not comment:
             return

@@ -155,20 +155,33 @@ class AnalysisTab(QWidget):
         self.list_ids = QListWidget()
         self.list_ids.itemChanged.connect(self.on_id_checkbox_changed)
 
+        # Barra de pesquisa discreta na parte inferior da lista de IDs
+        self.txt_search_list_ids = QLineEdit()
+        self.txt_search_list_ids.setPlaceholderText("🔍 Filtrar lista de IDs...")
+        self.txt_search_list_ids.setStyleSheet(
+            "QLineEdit { background-color: #1a1a1e; color: white; border: 1px solid #323238; border-radius: 4px; padding: 4px 8px; font-size: 11px; }"
+            "QLineEdit:focus { border: 1px solid #3b82f6; }"
+        )
+        self.txt_search_list_ids.textChanged.connect(self._filter_list_ids_ui)
+
         right_layout.addWidget(lbl_id_filter)
         right_layout.addLayout(id_filter_btns_layout)
-        right_layout.addWidget(self.list_ids, 2)
-
-        lbl_ia = QLabel("Assistente IA / Log (Em Desenvolvimento)")
-        lbl_ia.setStyleSheet("color: #a1a1aa; font-weight: bold; margin-top: 10px;")
-        self.txt_log = QTextEdit()
-        self.txt_log.setReadOnly(True)
-
-        right_layout.addWidget(lbl_ia)
-        right_layout.addWidget(self.txt_log, 1)
+        right_layout.addWidget(self.list_ids, 1)
+        right_layout.addWidget(self.txt_search_list_ids)
 
         main_layout.addLayout(left_layout, 7)
         main_layout.addLayout(right_layout, 3)
+
+    def _filter_list_ids_ui(self, search_text: str):
+        """Oculta/exibe itens na listWidget de IDs de acordo com a busca rápida."""
+        search_upper = search_text.strip().upper()
+        for i in range(self.list_ids.count()):
+            item = self.list_ids.item(i)
+            hex_id = item.data(Qt.ItemDataRole.UserRole) or item.text()
+            if not search_upper or search_upper in str(hex_id).upper() or search_upper in item.text().upper():
+                item.setHidden(False)
+            else:
+                item.setHidden(True)
 
     # ------------------------------------------------------------------
     # Slots de dados CAN
@@ -320,6 +333,10 @@ class AnalysisTab(QWidget):
     def apply_filters(self):
         for hex_id in self.can_database.keys():
             self.update_row_visibility(hex_id)
+
+    def apply_id_filter(self, filter_text: str):
+        """Aplica filtro de texto no ID do sniffer programaticamente."""
+        self.txt_filter_id.setText(filter_text)
 
     def update_row_visibility(self, hex_id: str):
         info = self.can_database.get(hex_id)
