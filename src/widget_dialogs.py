@@ -1,6 +1,7 @@
 """
 widget_dialogs.py — Diálogos de configuração para os Widgets do Dashboard.
 """
+from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (

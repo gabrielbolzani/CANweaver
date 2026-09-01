@@ -41,5 +41,6 @@ Você precisa dizer a ele qual é a versão. Siga o passo a passo:
    tag "v0.1.0" que você acabou de enviar, anexe o arquivo .exe 
    (se tiver) e publique!
 """
+from __future__ import annotations
 
 __version__ = "0.2.0"

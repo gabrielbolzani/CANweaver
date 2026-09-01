@@ -10,6 +10,7 @@ Contém:
   - CommentDialog: caixa de texto multilinhas para anotações.
     Enter confirma, Shift+Enter insere nova linha.
 """
+from __future__ import annotations
 
 import sys
 import time

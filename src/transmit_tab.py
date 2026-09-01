@@ -21,6 +21,7 @@ Dependências:
 Conversão de frequência:
   O usuário digita em Hz. Internamente converte para ms: interval_ms = 1000 / hz
 """
+from __future__ import annotations
 
 import time
 from PyQt6.QtCore import Qt, QTimer

@@ -13,6 +13,7 @@ Roles usados nos QStandardItem:
   UserRole+3    → int bitmask: quais bits específicos têm anotação
   UserRole+4    → bool: o BYTE inteiro (não só bits) tem anotação
 """
+from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem, QStyle

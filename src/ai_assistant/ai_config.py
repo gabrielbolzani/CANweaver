@@ -2,6 +2,7 @@
 ai_config.py — Gerenciamento e armazenamento seguro de configurações de IA (chaves de API, modelos).
 Salvo localmente na máquina do usuário (~/.canweaver/ai_config.json) para que nunca seja enviado ao Git.
 """
+from __future__ import annotations
 
 import os
 import json

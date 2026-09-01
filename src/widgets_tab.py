@@ -1,6 +1,7 @@
 """
 widgets_tab.py — Widget da Aba de Painéis / Gauges
 """
+from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QTimer, QPoint
 from PyQt6.QtWidgets import (

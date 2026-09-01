@@ -3,6 +3,7 @@ ai_panel.py — Interface visual do CAN Copilot com balões estilo SMS / Mensage
 Balões nativos arredondados com cones direcionais (Usuário em azul à direita, IA em cinza à esquerda),
 suporte a anexo de arquivos, gravação de ações, streaming de texto e execução de ações.
 """
+from __future__ import annotations
 
 import os
 import json

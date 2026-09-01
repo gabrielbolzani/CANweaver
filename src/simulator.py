@@ -14,6 +14,7 @@ Uso:
   while running:
       sim.step()  # bloqueia ~50ms por iteração
 """
+from __future__ import annotations
 
 import time
 import math

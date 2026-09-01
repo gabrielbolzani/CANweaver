@@ -9,6 +9,7 @@ Colunas: Timestamp | ID (HEX) | Tipo de Erro | Descrição
 Conectar ao sinal:
     can_thread.error_frame_received.connect(error_tab.add_error_frame)
 """
+from __future__ import annotations
 
 from datetime import datetime
 

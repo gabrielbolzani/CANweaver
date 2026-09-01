@@ -1,6 +1,7 @@
 """
 prompt_templates.py — Prompts e instruções do sistema para o CAN Copilot.
 """
+from __future__ import annotations
 
 SYSTEM_PROMPT = """Você é o **CAN Copilot**, o assistente especializado em engenharia reversa de barramentos CAN e telemetria veicular integrado ao software **CANweaver**.
 

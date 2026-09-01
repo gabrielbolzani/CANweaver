@@ -16,6 +16,7 @@ Assets (ícone, stylesheet):
   assets/ico.ico
   assets/style.qss
 """
+from __future__ import annotations
 
 import sys
 import os

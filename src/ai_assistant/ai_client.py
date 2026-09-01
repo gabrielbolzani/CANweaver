@@ -2,6 +2,7 @@
 ai_client.py — Cliente assíncrono de IA (QThread) com suporte a streaming de respostas para Google Gemini e OpenAI.
 Sem dependências pesadas externas (usa urllib da biblioteca padrão).
 """
+from __future__ import annotations
 
 import json
 import urllib.request

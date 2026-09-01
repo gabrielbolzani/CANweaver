@@ -22,6 +22,7 @@ Exemplo de uso:
   tab = AnalysisTab(annotation_manager, can_thread_ref)
   main_window.tab_widget.addTab(tab, "Análise (Sniffer)")
 """
+from __future__ import annotations
 
 import time
 from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSlot

@@ -20,6 +20,7 @@ Uso:
   comments = mgr.get_tooltip_for_byte("0C0", 2)
   mgr.add_comment("ID 0C0 - Byte 2", "Ângulo de direção")
 """
+from __future__ import annotations
 
 import os
 import re

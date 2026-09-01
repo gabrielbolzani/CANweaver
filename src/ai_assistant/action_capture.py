@@ -2,6 +2,7 @@
 action_capture.py — Motor de captura de janelas de tráfego CAN e cálculo de deltas de sinais para a IA.
 Permite ao usuário gravar uma ação física no veículo/barramento e compilar um resumo estatístico para o CAN Copilot.
 """
+from __future__ import annotations
 
 import time
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer

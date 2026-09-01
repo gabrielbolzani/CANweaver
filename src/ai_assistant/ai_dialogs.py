@@ -1,6 +1,7 @@
 """
 ai_dialogs.py — Diálogo de configuração de chaves de API e modelos para o CAN Copilot.
 """
+from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtWidgets import (
