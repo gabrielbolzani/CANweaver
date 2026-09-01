@@ -802,3 +802,349 @@ class MultiIndicatorDialog(QDialog):
             'default_label': self.txt_default_label.text().strip(),
             'default_color': self.btn_default_color._color,
         }
+
+
+# ---------------------------------------------------------------------------
+# IncrementalControllerDialog
+# ---------------------------------------------------------------------------
+
+class _ChannelRow:
+    def __init__(self, parent_layout, name: str, byte_idx: int, min_val: int, max_val: int, step_val: int, def_val: int, color_hex: str, on_delete=None):
+        self.parent_layout = parent_layout
+        self.on_delete = on_delete
+        self.widget = QWidget()
+        layout = QHBoxLayout(self.widget)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(6)
+
+        self.txt_name = QLineEdit(name)
+        self.txt_name.setPlaceholderText("Nome do Canal")
+        self.txt_name.setMinimumWidth(120)
+
+        self.sp_byte = QSpinBox()
+        self.sp_byte.setRange(0, 7)
+        self.sp_byte.setValue(byte_idx)
+        self.sp_byte.setFixedWidth(50)
+
+        self.sp_min = QSpinBox()
+        self.sp_min.setRange(0, 255)
+        self.sp_min.setValue(min_val)
+        self.sp_min.setFixedWidth(60)
+
+        self.sp_max = QSpinBox()
+        self.sp_max.setRange(0, 255)
+        self.sp_max.setValue(max_val)
+        self.sp_max.setFixedWidth(60)
+
+        self.sp_step = QSpinBox()
+        self.sp_step.setRange(1, 255)
+        self.sp_step.setValue(step_val)
+        self.sp_step.setFixedWidth(55)
+
+        self.sp_def = QSpinBox()
+        self.sp_def.setRange(0, 255)
+        self.sp_def.setValue(def_val)
+        self.sp_def.setFixedWidth(55)
+
+        self.btn_color = _color_preview_btn(color_hex, color_hex)
+        self.btn_color.setFixedWidth(75)
+        self.btn_color.clicked.connect(self._pick_color)
+
+        self.btn_del = QPushButton("✕")
+        self.btn_del.setFixedSize(26, 26)
+        self.btn_del.setStyleSheet(
+            "QPushButton { background-color: #3f1d24; color: #ef4444; border: 1px solid #7f1d1d; border-radius: 3px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #7f1d1d; color: white; }"
+        )
+        self.btn_del.clicked.connect(self._delete_self)
+
+        layout.addWidget(self.txt_name, 2)
+        layout.addWidget(self.sp_byte, 1)
+        layout.addWidget(self.sp_min, 1)
+        layout.addWidget(self.sp_max, 1)
+        layout.addWidget(self.sp_step, 1)
+        layout.addWidget(self.sp_def, 1)
+        layout.addWidget(self.btn_color, 1)
+        layout.addWidget(self.btn_del)
+
+        parent_layout.addWidget(self.widget)
+        self._alive = True
+
+    def _pick_color(self):
+        _open_color_picker(self.btn_color, self.widget)
+        self.btn_color.setText(self.btn_color._color)
+
+    def _delete_self(self):
+        self._alive = False
+        self.widget.deleteLater()
+        if self.on_delete:
+            self.on_delete(self)
+
+    def is_alive_and_valid(self) -> bool:
+        return self._alive and bool(self.txt_name.text().strip())
+
+    def get_channel_config(self) -> dict:
+        return {
+            "name": self.txt_name.text().strip(),
+            "byte": self.sp_byte.value(),
+            "min": self.sp_min.value(),
+            "max": self.sp_max.value(),
+            "step": self.sp_step.value(),
+            "default": self.sp_def.value(),
+            "color": self.btn_color._color
+        }
+
+
+class IncrementalControllerDialog(QDialog):
+    """Diálogo de configuração para o Controlador Incremental (Multi-Canais / Variáveis)."""
+
+    def __init__(self, parent=None, config=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configurar Controlador Incremental")
+        self.resize(680, 520)
+
+        self._channel_rows: list[_ChannelRow] = []
+
+        outer = QVBoxLayout(self)
+        outer.setSpacing(10)
+
+        # Dados Básicos
+        form = QFormLayout()
+        self.txt_name = QLineEdit(config.get("name", "Controlador Incremental") if config else "Controlador Incremental")
+        self.txt_can_id = QLineEdit(config.get("can_id", "405") if config else "405")
+        
+        self.txt_base_payload = QLineEdit(config.get("base_payload", "00 00 00 00 00 00 00 00") if config else "00 00 00 00 00 00 00 00")
+        self.txt_base_payload.setPlaceholderText("8 bytes em HEX (ex: 00 00 00 00 00 00 00 00)")
+
+        # Periodicidade e Intertravamento
+        timing_layout = QHBoxLayout()
+        self.chk_periodic = QCheckBox("Transmissão Cíclica (Periódica)")
+        self.chk_periodic.setChecked(config.get("periodic", True) if config else True)
+        
+        self.sp_hz = QSpinBox()
+        self.sp_hz.setRange(1, 500)
+        self.sp_hz.setValue(config.get("hz", 20) if config else 20)
+        self.sp_hz.setSuffix(" Hz")
+        
+        timing_layout.addWidget(self.chk_periodic)
+        timing_layout.addWidget(QLabel("Frequência:"))
+        timing_layout.addWidget(self.sp_hz)
+        timing_layout.addStretch()
+
+        self.chk_mutual_exclusion = QCheckBox("Exclusão Mútua / Intertravamento (Zerar os demais canais ao alterar um canal)")
+        self.chk_mutual_exclusion.setToolTip("Garante que somente um canal tenha valor ativo (> mín) por vez, zerando os outros.")
+        self.chk_mutual_exclusion.setChecked(config.get("mutual_exclusion", True) if config else True)
+
+        form.addRow("Nome do Widget:", self.txt_name)
+        form.addRow("ID CAN (HEX):", self.txt_can_id)
+        form.addRow("Payload Base:", self.txt_base_payload)
+        form.addRow("Transmissão:", timing_layout)
+        form.addRow("Intertravamento:", self.chk_mutual_exclusion)
+
+        outer.addLayout(form)
+
+        # Divisor
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.HLine)
+        sep1.setStyleSheet("color: #323238;")
+        outer.addWidget(sep1)
+
+        # Cabeçalho dos Canais
+        lbl_channels = QLabel("Canais de Controle / Bytes:")
+        lbl_channels.setStyleSheet("font-weight: bold; color: white; font-size: 13px;")
+        outer.addWidget(lbl_channels)
+
+        col_hdr = QHBoxLayout()
+        col_hdr.setSpacing(6)
+        headers = [
+            ("Nome do Canal", 2),
+            ("Byte (0-7)", 1),
+            ("Mín", 1),
+            ("Máx", 1),
+            ("Passo", 1),
+            ("Inicial", 1),
+            ("Cor", 1),
+            ("", 26)
+        ]
+        for txt, stretch in headers:
+            lbl = QLabel(txt)
+            lbl.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: bold;")
+            if txt == "":
+                lbl.setFixedWidth(26)
+                col_hdr.addWidget(lbl)
+            else:
+                col_hdr.addWidget(lbl, stretch)
+        outer.addLayout(col_hdr)
+
+        # Área de Canais
+        self.channels_area = QVBoxLayout()
+        self.channels_area.setSpacing(4)
+        channels_container = QWidget()
+        channels_container.setLayout(self.channels_area)
+        outer.addWidget(channels_container, 1)
+
+        # Inicialização dos canais
+        if config and config.get("channels"):
+            for ch in config["channels"]:
+                self._add_channel_row(
+                    ch.get("name", "Canal"),
+                    ch.get("byte", 0),
+                    ch.get("min", 0),
+                    ch.get("max", 255),
+                    ch.get("step", 10),
+                    ch.get("default", 0),
+                    ch.get("color", "#3b82f6")
+                )
+        else:
+            # Padrão: 2 canais (ex: Canal A no Byte 0 e Canal B no Byte 1)
+            self._add_channel_row("Canal A", 0, 0, 255, 10, 0, "#3b82f6")
+            self._add_channel_row("Canal B", 1, 0, 255, 10, 0, "#ef4444")
+
+        btn_add = QPushButton("+ Adicionar Canal")
+        btn_add.setStyleSheet(
+            "QPushButton { background-color: #1e3a5f; color: white; padding: 5px 14px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #1d4ed8; }"
+        )
+        btn_add.clicked.connect(self._add_new_channel_auto)
+        outer.addWidget(btn_add)
+
+        # Divisor
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet("color: #323238;")
+        outer.addWidget(sep2)
+
+        # Botões Rodapé
+        btn_row = QHBoxLayout()
+        btn_ok = QPushButton("Salvar")
+        btn_ok.clicked.connect(self._validate_and_accept)
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_ok)
+        btn_row.addWidget(btn_cancel)
+        outer.addLayout(btn_row)
+
+    def _add_channel_row(self, name: str, byte_idx: int, min_val: int, max_val: int, step_val: int, def_val: int, color_hex: str):
+        row = _ChannelRow(
+            self.channels_area, name, byte_idx, min_val, max_val, step_val, def_val, color_hex,
+            on_delete=lambda r: self._channel_rows.remove(r) if r in self._channel_rows else None
+        )
+        self._channel_rows.append(row)
+
+    def _add_new_channel_auto(self):
+        existing_bytes = [r.sp_byte.value() for r in self._channel_rows if r._alive]
+        next_byte = 0
+        for b in range(8):
+            if b not in existing_bytes:
+                next_byte = b
+                break
+        colors = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"]
+        next_color = colors[len(self._channel_rows) % len(colors)]
+        self._add_channel_row(f"Canal {chr(65 + len(self._channel_rows))}", next_byte, 0, 255, 10, 0, next_color)
+
+    def _validate_and_accept(self):
+        try:
+            int(self.txt_can_id.text().strip(), 16)
+        except ValueError:
+            QMessageBox.warning(self, "Erro", "ID CAN deve ser hexadecimal válido (ex: 405 ou 0C0).")
+            return
+
+        valid = [r for r in self._channel_rows if r.is_alive_and_valid()]
+        if not valid:
+            QMessageBox.warning(self, "Erro", "Adicione pelo menos um canal com nome preenchido.")
+            return
+
+        for r in valid:
+            if r.sp_min.value() >= r.sp_max.value():
+                QMessageBox.warning(self, "Erro", f"No canal '{r.txt_name.text()}', o valor mínimo deve ser menor que o máximo.")
+                return
+
+        self.accept()
+
+    def get_config(self) -> dict:
+        can_id_text = self.txt_can_id.text().strip()
+        try:
+            can_id_str = f"{int(can_id_text, 16):03X}"
+        except ValueError:
+            can_id_str = can_id_text.upper().replace("0X", "")
+
+        valid = [r for r in self._channel_rows if r.is_alive_and_valid()]
+        return {
+            "type": "incremental_controller",
+            "name": self.txt_name.text().strip(),
+            "can_id": can_id_str,
+            "base_payload": self.txt_base_payload.text().strip(),
+            "periodic": self.chk_periodic.isChecked(),
+            "hz": self.sp_hz.value(),
+            "mutual_exclusion": self.chk_mutual_exclusion.isChecked(),
+            "channels": [r.get_channel_config() for r in valid]
+        }
+
+
+# ---------------------------------------------------------------------------
+# TerminalDialog
+# ---------------------------------------------------------------------------
+
+class TerminalDialog(QDialog):
+    """Diálogo de configuração para o Terminal CAN (somente leitura com filtros)."""
+
+    def __init__(self, parent=None, config=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configurar Terminal CAN")
+        self.resize(440, 280)
+
+        outer = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.txt_name = QLineEdit(config.get("name", "Terminal CAN") if config else "Terminal CAN")
+        self.txt_filter = QLineEdit(config.get("filter_ids", "") if config else "")
+        self.txt_filter.setPlaceholderText("Ex: 405, 180 (ou deixe vazio para exibir todos)")
+
+        self.sp_max_lines = QSpinBox()
+        self.sp_max_lines.setRange(50, 5000)
+        self.sp_max_lines.setValue(config.get("max_lines", 200) if config else 200)
+
+        self.chk_timestamp = QCheckBox("Exibir Timestamp (Hora:Min:Seg.ms)")
+        self.chk_timestamp.setChecked(config.get("show_timestamp", True) if config else True)
+
+        self.chk_ascii = QCheckBox("Exibir Decodificação ASCII do Payload")
+        self.chk_ascii.setChecked(config.get("show_ascii", True) if config else True)
+
+        self.chk_freq = QCheckBox("Exibir Frequência (Hz) Calculada")
+        self.chk_freq.setChecked(config.get("show_freq", True) if config else True)
+
+        form.addRow("Nome do Widget:", self.txt_name)
+        form.addRow("Filtro de IDs CAN:", self.txt_filter)
+        form.addRow("Limite de Linhas (Buffer):", self.sp_max_lines)
+        form.addRow("Opções Visuais:", self.chk_timestamp)
+        form.addRow("", self.chk_ascii)
+        form.addRow("", self.chk_freq)
+
+        outer.addLayout(form)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #323238;")
+        outer.addWidget(sep)
+
+        btn_row = QHBoxLayout()
+        btn_ok = QPushButton("Salvar")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_ok)
+        btn_row.addWidget(btn_cancel)
+        outer.addLayout(btn_row)
+
+    def get_config(self) -> dict:
+        return {
+            "type": "terminal",
+            "name": self.txt_name.text().strip(),
+            "filter_ids": self.txt_filter.text().strip(),
+            "max_lines": self.sp_max_lines.value(),
+            "show_timestamp": self.chk_timestamp.isChecked(),
+            "show_ascii": self.chk_ascii.isChecked(),
+            "show_freq": self.chk_freq.isChecked()
+        }
