@@ -98,7 +98,7 @@ class AIBubbleWidget(QWidget):
         self.bubble_layout.setSpacing(8)
 
         # Cabeçalho do Copilot
-        hdr = QLabel("🤖 CAN Copilot")
+        hdr = QLabel("CAN Copilot")
         hdr.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold; background: transparent;")
         self.bubble_layout.addWidget(hdr)
 
@@ -150,7 +150,7 @@ class AIBubbleWidget(QWidget):
             try:
                 cfg = json.loads(block)
                 w_name = cfg.get("name", "Widget")
-                btn = QPushButton(f"➕ Inserir '{w_name}' no Dashboard")
+                btn = QPushButton(f"+ Inserir '{w_name}' no Dashboard")
                 btn.setStyleSheet(
                     "QPushButton { background-color: #10b981; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-weight: bold; font-size: 11px; text-align: left; }"
                     "QPushButton:hover { background-color: #059669; }"
@@ -167,7 +167,7 @@ class AIBubbleWidget(QWidget):
                 f_cfg = json.loads(block)
                 f_ids = f_cfg.get("filter_ids", "")
                 if f_ids:
-                    btn = QPushButton(f"🔍 Aplicar Filtro ({f_ids})")
+                    btn = QPushButton(f"Aplicar Filtro ({f_ids})")
                     btn.setStyleSheet(
                         "QPushButton { background-color: #0284c7; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-weight: bold; font-size: 11px; text-align: left; }"
                         "QPushButton:hover { background-color: #0369a1; }"
@@ -180,7 +180,7 @@ class AIBubbleWidget(QWidget):
 
         # 3. Documentation Update
         for block in re.findall(r'```markdown:update_doc\s*([\s\S]*?)\s*```', full_text):
-            btn = QPushButton("📝 Atualizar Documentação (.md)")
+            btn = QPushButton("Atualizar Documentação (.md)")
             btn.setStyleSheet(
                 "QPushButton { background-color: #8b5cf6; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-weight: bold; font-size: 11px; text-align: left; }"
                 "QPushButton:hover { background-color: #7c3aed; }"
@@ -218,6 +218,32 @@ class CANCopilotPanel(QWidget):
 
         self._build_ui()
         self._update_model_badge()
+        self._update_record_button_text()
+        self._set_status("ready", "Pronto")
+
+    def set_worker(self, can_worker_ref):
+        """Atualiza a referência do worker CAN e do motor de captura."""
+        self.can_worker = can_worker_ref
+        if hasattr(self, "capture_engine") and self.capture_engine:
+            self.capture_engine.set_worker(can_worker_ref)
+
+    def _set_status(self, kind: str, text: str):
+        """Atualiza o status com uma bolinha colorida em HTML universal."""
+        colors = {
+            "ready": "#22c55e",
+            "recording": "#ef4444",
+            "thinking": "#eab308",
+            "error": "#ef4444",
+            "info": "#38bdf8",
+        }
+        c = colors.get(kind, "#a1a1aa")
+        self.lbl_status.setText(f"<span style='color: {c}; font-size: 13px;'>●</span> <span style='color: #d4d4d8;'>{text}</span>")
+
+    def _update_record_button_text(self):
+        cfg = load_ai_config()
+        duration = float(cfg.get("capture_duration", 3.0))
+        self.btn_record_action.setText(f"Gravar Ação ({duration:g}s)")
+        self.btn_record_action.setToolTip(f"Grava {duration:g}s do barramento CAN e anexa variações de sinal")
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -228,7 +254,7 @@ class CANCopilotPanel(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(6)
 
-        title_lbl = QLabel("🤖 <b>CAN Copilot</b>")
+        title_lbl = QLabel("<b>CAN Copilot</b>")
         title_lbl.setStyleSheet("font-size: 13px; color: #38bdf8; font-weight: bold;")
         
         self.lbl_model_badge = QLabel("Gemini")
@@ -241,7 +267,7 @@ class CANCopilotPanel(QWidget):
         toolbar.addWidget(self.lbl_model_badge)
         toolbar.addStretch()
 
-        self.btn_clear = QPushButton("🧹 Limpar")
+        self.btn_clear = QPushButton("Limpar")
         self.btn_clear.setToolTip("Limpar histórico da conversa")
         self.btn_clear.setStyleSheet(
             "QPushButton { background-color: #202024; color: #e1e1e6; border: 1px solid #323238; border-radius: 4px; font-size: 11px; padding: 4px 10px; font-weight: 500; }"
@@ -249,8 +275,8 @@ class CANCopilotPanel(QWidget):
         )
         self.btn_clear.clicked.connect(self.clear_context)
 
-        self.btn_config = QPushButton("⚙️ API")
-        self.btn_config.setToolTip("Configurar Chave de API e Modelo")
+        self.btn_config = QPushButton("Configurar API")
+        self.btn_config.setToolTip("Configurar Chave de API, Modelo e Duração")
         self.btn_config.setStyleSheet(
             "QPushButton { background-color: #202024; color: #e1e1e6; border: 1px solid #323238; border-radius: 4px; font-size: 11px; padding: 4px 10px; font-weight: 500; }"
             "QPushButton:hover { background-color: #2e3035; color: white; }"
@@ -290,7 +316,7 @@ class CANCopilotPanel(QWidget):
         att_layout.setContentsMargins(4, 2, 4, 2)
         att_layout.setSpacing(6)
 
-        self.lbl_att_name = QLabel("📎 Anexo")
+        self.lbl_att_name = QLabel("Anexo")
         self.lbl_att_name.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold;")
         
         self.btn_remove_att = QPushButton("✕")
@@ -314,15 +340,14 @@ class CANCopilotPanel(QWidget):
         rec_layout.setContentsMargins(4, 2, 4, 2)
         rec_layout.setSpacing(6)
 
-        self.btn_record_action = QPushButton("⏺ Gravar Ação")
-        self.btn_record_action.setToolTip("Grava 3s do barramento CAN e anexa variações de sinal")
+        self.btn_record_action = QPushButton("Gravar Ação (3s)")
         self.btn_record_action.setStyleSheet(
             "QPushButton { background-color: #27272a; color: #f87171; border: 1px solid #451a1a; border-radius: 4px; padding: 4px 10px; font-weight: bold; font-size: 11px; }"
             "QPushButton:hover { background-color: #451a1a; color: white; }"
         )
         self.btn_record_action.clicked.connect(self._prompt_and_record_action)
 
-        self.btn_attach_file = QPushButton("📎 Anexar")
+        self.btn_attach_file = QPushButton("Anexar Arquivo")
         self.btn_attach_file.setToolTip("Anexar arquivo de log, DBC, CSV ou notas (.md, .txt)")
         self.btn_attach_file.setStyleSheet(
             "QPushButton { background-color: #27272a; color: #93c5fd; border: 1px solid #1e3a8a; border-radius: 4px; padding: 4px 10px; font-weight: bold; font-size: 11px; }"
@@ -338,7 +363,7 @@ class CANCopilotPanel(QWidget):
         self.pbar_capture.setStyleSheet("QProgressBar { background: #27272a; border: none; border-radius: 3px; } QProgressBar::chunk { background: #ef4444; border-radius: 3px; }")
         self.pbar_capture.hide()
 
-        self.lbl_status = QLabel("🟢 Pronto")
+        self.lbl_status = QLabel()
         self.lbl_status.setStyleSheet("color: #a1a1aa; font-size: 11px;")
 
         rec_layout.addWidget(self.btn_record_action)
@@ -390,7 +415,7 @@ class CANCopilotPanel(QWidget):
 
     def _add_welcome_bubble(self):
         welcome_text = (
-            "👋 **Olá! Sou o CAN Copilot.**\n\n"
+            "**Olá! Sou o CAN Copilot.**\n\n"
             "Estou pronto para ajudar no diagnóstico e engenharia reversa do barramento CAN.\n"
             "• **Grave ações** (ex: pisar no freio) para descobrir IDs e bytes que variam.\n"
             "• **Anexe logs/DBCs** para decodificar mensagens.\n"
@@ -409,6 +434,7 @@ class CANCopilotPanel(QWidget):
         dlg = AIConfigDialog(self)
         if dlg.exec():
             self._update_model_badge()
+            self._update_record_button_text()
 
     def clear_context(self):
         """Limpa o histórico e os balões da conversa."""
@@ -422,7 +448,7 @@ class CANCopilotPanel(QWidget):
                 item.widget().deleteLater()
 
         self._add_welcome_bubble()
-        self.lbl_status.setText("🟢 Contexto Limpo")
+        self._set_status("ready", "Contexto Limpo")
 
     def _prompt_attach_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -443,9 +469,9 @@ class CANCopilotPanel(QWidget):
 
             base_name = os.path.basename(file_path)
             self.attached_filename = base_name
-            self.pending_attachment_text = f"### 📎 Arquivo Anexado: `{base_name}` ({file_size_kb:.1f} KB)\n```\n{content}\n```"
+            self.pending_attachment_text = f"### Arquivo Anexado: `{base_name}` ({file_size_kb:.1f} KB)\n```\n{content}\n```"
             
-            self.lbl_att_name.setText(f"📎 {base_name} ({file_size_kb:.1f} KB)")
+            self.lbl_att_name.setText(f"{base_name} ({file_size_kb:.1f} KB)")
             self.attachment_badge.show()
             self.txt_input.setFocus()
         except Exception as e:
@@ -457,16 +483,28 @@ class CANCopilotPanel(QWidget):
         self.attachment_badge.hide()
 
     def _prompt_and_record_action(self):
+        if not self.can_worker or not getattr(self.can_worker, 'running', False):
+            QMessageBox.warning(
+                self, "Barramento Desconectado",
+                "O CANweaver não está conectado a um barramento CAN ativo.\n\n"
+                "Por favor, conecte-se a uma interface real (ou selecione Modo Simulado) em:\n"
+                "Conexão -> Conectar ao Barramento... antes de gravar ações."
+            )
+            return
+
+        cfg = load_ai_config()
+        duration = float(cfg.get("capture_duration", 3.0))
+
         desc, ok = QInputDialog.getText(
             self, "Gravar Ação para IA",
-            "Descreva a ação física que você vai realizar (ex: 'Pisar no pedal de freio'):"
+            f"Descreva a ação física que você vai realizar nos próximos {duration:g} segundos:\n(Ex: 'Pisar no pedal de freio', 'Ligar a seta esquerda')"
         )
         if ok and desc.strip():
             self.btn_record_action.setEnabled(False)
-            self.btn_record_action.setText("🔴 Gravando...")
+            self.btn_record_action.setText(f"Gravando ({duration:g}s)...")
             self.pbar_capture.show()
-            self.lbl_status.setText("⏳ Gravando 3s de tráfego CAN...")
-            self.capture_engine.start_capture(description=desc.strip(), duration_sec=3.0)
+            self._set_status("recording", f"Gravando {duration:g}s...")
+            self.capture_engine.start_capture(description=desc.strip(), duration_sec=duration)
 
     def _on_capture_progress(self, progress: float):
         self.pbar_capture.setValue(int(progress * 100))
@@ -474,12 +512,12 @@ class CANCopilotPanel(QWidget):
     def _on_capture_finished(self, report_dict: dict, formatted_md: str):
         self.pbar_capture.hide()
         self.btn_record_action.setEnabled(True)
-        self.btn_record_action.setText("⏺ Gravar Ação")
-        self.lbl_status.setText(f"✓ {report_dict['total_frames']} frames capturados")
+        self._update_record_button_text()
+        self._set_status("info", f"{report_dict['total_frames']} frames capturados")
 
         self.pending_attachment_text = formatted_md
         self.attached_filename = f"Ação: {report_dict.get('description', 'Captura')}"
-        self.lbl_att_name.setText(f"📊 Relatório de Ação ({report_dict['total_frames']} frames | {report_dict.get('description', '')})")
+        self.lbl_att_name.setText(f"Relatório de Ação ({report_dict['total_frames']} frames | {report_dict.get('description', '')})")
         self.attachment_badge.show()
         
         current_text = self.txt_input.toPlainText().strip()
@@ -518,7 +556,7 @@ class CANCopilotPanel(QWidget):
 
         display_text = user_text
         if self.attached_filename:
-            display_text = f"📎 [{self.attached_filename}]\n{user_text}" if user_text else f"📎 [{self.attached_filename}]"
+            display_text = f"[{self.attached_filename}]\n{user_text}" if user_text else f"[{self.attached_filename}]"
 
         self._remove_attachment()
         self.txt_input.clear()
@@ -541,7 +579,7 @@ class CANCopilotPanel(QWidget):
 
         # Cria balão de resposta da IA
         self.current_ai_bubble = self._add_ai_bubble("<i>Digitando...</i>")
-        self.lbl_status.setText("⏳ Pensando...")
+        self._set_status("thinking", "Pensando...")
         self.btn_send.setEnabled(False)
 
         self.current_worker = AICopilotWorker(self.history, extra_context=extra_context, parent=self)
@@ -552,7 +590,7 @@ class CANCopilotPanel(QWidget):
     def _on_response_finished(self, full_response: str):
         self.history.append({"role": "model", "content": full_response})
         self.btn_send.setEnabled(True)
-        self.lbl_status.setText("🟢 Pronto")
+        self._set_status("ready", "Pronto")
 
         if self.current_ai_bubble:
             self.current_ai_bubble.set_content(full_response)
@@ -560,9 +598,9 @@ class CANCopilotPanel(QWidget):
 
     def _on_error_occurred(self, err_msg: str):
         self.btn_send.setEnabled(True)
-        self.lbl_status.setText("❌ Erro")
+        self._set_status("error", "Erro")
         if self.current_ai_bubble:
-            self.current_ai_bubble.set_content(f"❌ **Erro:** {err_msg}")
+            self.current_ai_bubble.set_content(f"**Erro:** {err_msg}")
         self._scroll_to_bottom()
 
     def _trigger_create_widget(self, config: dict):

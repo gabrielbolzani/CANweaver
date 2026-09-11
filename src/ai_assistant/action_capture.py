@@ -30,19 +30,36 @@ class ActionCaptureEngine(QObject):
         self.timer_tick.setInterval(50)
         self.timer_tick.timeout.connect(self._on_tick)
 
+    def set_worker(self, can_worker_ref):
+        """Atualiza a referência da thread CANWorker, reconectando sinais se necessário."""
+        if self.is_capturing and self.can_worker:
+            try:
+                self.can_worker.frame_received.disconnect(self._on_frame_received)
+            except Exception:
+                pass
+        self.can_worker = can_worker_ref
+        if self.is_capturing and self.can_worker:
+            try:
+                self.can_worker.frame_received.connect(self._on_frame_received)
+            except Exception:
+                pass
+
     def start_capture(self, description: str = "", duration_sec: float = 3.0):
         """Inicia a captura de uma janela de ação no barramento."""
         if self.is_capturing:
             return
         
         self.user_description = description.strip()
-        self.duration_sec = max(1.0, min(10.0, duration_sec))
+        self.duration_sec = max(0.5, min(60.0, float(duration_sec)))
         self.recorded_frames.clear()
         self.start_time = time.time()
         self.is_capturing = True
 
         if self.can_worker:
-            self.can_worker.frame_received.connect(self._on_frame_received)
+            try:
+                self.can_worker.frame_received.connect(self._on_frame_received)
+            except Exception:
+                pass
 
         self.timer_tick.start()
 
@@ -159,23 +176,31 @@ class ActionCaptureEngine(QObject):
 
         # Formata em Markdown legível
         md = []
-        md.append(f"### 📊 Relatório de Ação Capturada ({report_dict['duration']}s | {total_frames} frames)")
+        md.append(f"### Relatório de Ação Capturada ({report_dict['duration']}s | {total_frames} frames)")
         if self.user_description:
             md.append(f"**Ação relatada pelo usuário:** *\"{self.user_description}\"*")
         
-        md.append(f"**IDs Ativos no Barramento ({len(by_id)}):** `{'`, `'.join(report_dict['all_active_ids'])}`\n")
-
-        if changed_ids:
-            md.append("#### 🎯 IDs que Apresentaram Variação durante a Ação:")
-            for item in changed_ids:
-                md.append(f"- **ID `{item['can_id_hex']}`** ({item['count']} frames | ~{item['freq']:.1f} Hz):")
-                for var in item["variations"]:
-                    md.append(
-                        f"  - **Byte {var['byte_idx']}**: Variou de `0x{var['min']:02X}` ({var['min']}) até `0x{var['max']:02X}` ({var['max']}) "
-                        f"[Primeiro: `0x{var['first']:02X}`, Último: `0x{var['last']:02X}`, Delta: `{var['delta']:+d}`, Bits alternados: `{var['bit_flips_hex']}`]"
-                    )
+        if total_frames == 0:
+            md.append(
+                "> **[AVISO] Nenhum frame CAN foi recebido durante a janela de captura.**\n"
+                "- Verifique se a interface física (CANable / SLCAN / SocketCAN) está conectada e ativa.\n"
+                "- Confirme se a velocidade do barramento (bitrate) confere com a rede do veículo.\n"
+                "- Se a ignição do veículo estiver desligada, pode não haver mensagens transitando."
+            )
         else:
-            md.append("ℹ️ *Nenhum byte apresentou variação significativa durante a janela de captura.*")
+            md.append(f"**IDs Ativos no Barramento ({len(by_id)}):** `{'`, `'.join(report_dict['all_active_ids'])}`\n")
+
+            if changed_ids:
+                md.append("#### IDs que Apresentaram Variação durante a Ação:")
+                for item in changed_ids:
+                    md.append(f"- **ID `{item['can_id_hex']}`** ({item['count']} frames | ~{item['freq']:.1f} Hz):")
+                    for var in item["variations"]:
+                        md.append(
+                            f"  - **Byte {var['byte_idx']}**: Variou de `0x{var['min']:02X}` ({var['min']}) até `0x{var['max']:02X}` ({var['max']}) "
+                            f"[Primeiro: `0x{var['first']:02X}`, Último: `0x{var['last']:02X}`, Delta: `{var['delta']:+d}`, Bits alternados: `{var['bit_flips_hex']}`]"
+                        )
+            else:
+                md.append("*Nenhum byte apresentou variação significativa durante a janela de captura.*")
 
         formatted_md = "\n".join(md)
         return report_dict, formatted_md

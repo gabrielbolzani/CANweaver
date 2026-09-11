@@ -127,22 +127,22 @@ class DashboardWidget(QWidget):
                 "QMenu::item { padding: 6px 24px; }"
                 "QMenu::item:selected { background-color: #3b82f6; }"
             )
-            action_edit = QAction("✏️ Editar Widget", self)
+            action_edit = QAction("Editar Widget", self)
             action_edit.triggered.connect(lambda: self.edit_callback(self) if self.edit_callback else None)
 
-            action_center = QAction("↔️ Centralizar na Horizontal", self)
+            action_center = QAction("Centralizar na Horizontal", self)
             action_center.triggered.connect(self.center_horizontally)
 
-            action_full_width = QAction("📐 Ajustar à Largura da Tela (100%)", self)
+            action_full_width = QAction("Ajustar à Largura da Tela (100%)", self)
             action_full_width.triggered.connect(lambda: self.fit_to_width(20))
 
-            action_snap = QAction("🧲 Alinhar à Grade", self)
+            action_snap = QAction("Alinhar à Grade", self)
             action_snap.triggered.connect(lambda: self.snap_to_grid(20))
 
-            action_dup = QAction("📋 Duplicar Widget", self)
+            action_dup = QAction("Duplicar Widget", self)
             action_dup.triggered.connect(lambda: self.duplicate_callback(self) if self.duplicate_callback else None)
             
-            action_del = QAction("🗑 Excluir Widget", self)
+            action_del = QAction("Excluir Widget", self)
             action_del.triggered.connect(self.deleteLater)
             
             menu.addAction(action_edit)
@@ -787,7 +787,7 @@ class IncrementalControllerWidget(DashboardWidget):
         header.addStretch()
 
         # Botão de disparo único
-        btn_pulse = QPushButton("🚀 Pulso")
+        btn_pulse = QPushButton("Pulso")
         btn_pulse.setToolTip("Envia 1 frame com os valores atuais")
         btn_pulse.setStyleSheet(
             "QPushButton { background-color: #2e3035; color: white; border: 1px solid #444;"
@@ -1125,7 +1125,7 @@ class TerminalWidget(DashboardWidget):
 
         toolbar.addStretch()
 
-        self.btn_clear = QPushButton("🧹 Limpar")
+        self.btn_clear = QPushButton("Limpar")
         self.btn_clear.setStyleSheet(
             "QPushButton { background-color: #27272a; color: #a1a1aa; border: 1px solid #3f3f46; border-radius: 3px; font-size: 11px; padding: 2px 6px; }"
             "QPushButton:hover { background-color: #3f3f46; color: white; }"
@@ -1265,31 +1265,31 @@ class WidgetsTab(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         
-        self.btn_edit = QPushButton("🔒 Layout Travado")
+        self.btn_edit = QPushButton("Layout Travado")
         self.btn_edit.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
         self.btn_edit.setCheckable(True)
         self.btn_edit.toggled.connect(self.toggle_edit_mode)
         
-        self.btn_grid = QPushButton("🔲 Grade Visível")
+        self.btn_grid = QPushButton("Grade Visível")
         self.btn_grid.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
         self.btn_grid.setCheckable(True)
         self.btn_grid.toggled.connect(self.toggle_grid)
         self.btn_grid.hide()
 
-        self.btn_snap = QPushButton("🧲 Snap Ativado")
+        self.btn_snap = QPushButton("Snap Ativado")
         self.btn_snap.setStyleSheet("background-color: #3b82f6; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
         self.btn_snap.setCheckable(True)
         self.btn_snap.setChecked(True)
         self.btn_snap.toggled.connect(self.toggle_snap)
         self.btn_snap.hide()
 
-        self.btn_center_all = QPushButton("↔️ Centralizar Todos")
+        self.btn_center_all = QPushButton("Centralizar Todos")
         self.btn_center_all.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
         self.btn_center_all.setToolTip("Centraliza todos os widgets horizontalmente na tela")
         self.btn_center_all.clicked.connect(self.center_all_widgets)
         self.btn_center_all.hide()
 
-        self.btn_snap_all = QPushButton("🧲 Alinhar Todos à Grade")
+        self.btn_snap_all = QPushButton("Alinhar Todos à Grade")
         self.btn_snap_all.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
         self.btn_snap_all.setToolTip("Alinha todos os widgets aos pontos da grade mais próximos")
         self.btn_snap_all.clicked.connect(self.snap_all_widgets)
@@ -1319,25 +1319,25 @@ class WidgetsTab(QWidget):
         menu = QMenu(self)
         menu.setStyleSheet("QMenu { background-color: #202024; color: white; border: 1px solid #323238; } QMenu::item:selected { background-color: #3b82f6; }")
         
-        action_label = QAction("📝 Inserir Texto", self)
+        action_label = QAction("Inserir Texto", self)
         action_label.triggered.connect(lambda: self.add_label(pos))
         
-        action_ind = QAction("💡 Inserir Indicador", self)
+        action_ind = QAction("Inserir Indicador", self)
         action_ind.triggered.connect(lambda: self.add_indicator(pos))
 
-        action_multi = QAction("🚥 Inserir Ind. Multi-Estado", self)
+        action_multi = QAction("Inserir Ind. Multi-Estado", self)
         action_multi.triggered.connect(lambda: self.add_multi_indicator(pos))
         
-        action_ctrl = QAction("🎛️ Inserir Controlador", self)
+        action_ctrl = QAction("Inserir Controlador", self)
         action_ctrl.triggered.connect(lambda: self.add_controller(pos))
 
-        action_inc_ctrl = QAction("🎚️ Inserir Controlador Incremental", self)
+        action_inc_ctrl = QAction("Inserir Controlador Incremental", self)
         action_inc_ctrl.triggered.connect(lambda: self.add_incremental_controller(pos))
 
-        action_gauge = QAction("📊 Inserir Gauge", self)
+        action_gauge = QAction("Inserir Gauge", self)
         action_gauge.triggered.connect(lambda: self.add_gauge(pos))
 
-        action_terminal = QAction("💻 Inserir Terminal CAN", self)
+        action_terminal = QAction("Inserir Terminal CAN", self)
         action_terminal.triggered.connect(lambda: self.add_terminal(pos))
         
         menu.addAction(action_label)
@@ -1361,14 +1361,14 @@ class WidgetsTab(QWidget):
     def toggle_edit_mode(self, checked):
         self.edit_mode = checked
         if checked:
-            self.btn_edit.setText("🔓 Layout Destravado (Edição)")
+            self.btn_edit.setText("Layout Destravado (Edição)")
             self.btn_edit.setStyleSheet("background-color: #10b981; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
             self.btn_grid.show()
             self.btn_snap.show()
             self.btn_center_all.show()
             self.btn_snap_all.show()
         else:
-            self.btn_edit.setText("🔒 Layout Travado")
+            self.btn_edit.setText("Layout Travado")
             self.btn_edit.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
             self.btn_grid.hide()
             self.btn_grid.setChecked(False)
@@ -1382,20 +1382,20 @@ class WidgetsTab(QWidget):
     def toggle_grid(self, checked):
         self.canvas.show_grid = checked
         if checked:
-            self.btn_grid.setText("🔲 Grade Visível")
+            self.btn_grid.setText("Grade Visível")
             self.btn_grid.setStyleSheet("background-color: #3b82f6; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
         else:
-            self.btn_grid.setText("🔲 Grade Oculta")
+            self.btn_grid.setText("Grade Oculta")
             self.btn_grid.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
         self.canvas.update()
 
     def toggle_snap(self, checked):
         self.canvas.snap_to_grid = checked
         if checked:
-            self.btn_snap.setText("🧲 Snap Ativado")
+            self.btn_snap.setText("Snap Ativado")
             self.btn_snap.setStyleSheet("background-color: #3b82f6; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
         else:
-            self.btn_snap.setText("🧲 Snap Desativado")
+            self.btn_snap.setText("Snap Desativado")
             self.btn_snap.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
 
     def center_all_widgets(self):

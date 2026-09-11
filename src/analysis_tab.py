@@ -158,7 +158,7 @@ class AnalysisTab(QWidget):
 
         # Barra de pesquisa discreta na parte inferior da lista de IDs
         self.txt_search_list_ids = QLineEdit()
-        self.txt_search_list_ids.setPlaceholderText("🔍 Filtrar lista de IDs...")
+        self.txt_search_list_ids.setPlaceholderText("Filtrar lista de IDs...")
         self.txt_search_list_ids.setStyleSheet(
             "QLineEdit { background-color: #1a1a1e; color: white; border: 1px solid #323238; border-radius: 4px; padding: 4px 8px; font-size: 11px; }"
             "QLineEdit:focus { border: 1px solid #3b82f6; }"

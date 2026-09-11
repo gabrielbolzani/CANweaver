@@ -43,4 +43,4 @@ Você precisa dizer a ele qual é a versão. Siga o passo a passo:
 """
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "2.0.0"

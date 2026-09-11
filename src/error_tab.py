@@ -58,7 +58,7 @@ class ErrorTab(QWidget):
         # ── Cabeçalho ────────────────────────────────────────────────
         header_layout = QHBoxLayout()
 
-        lbl_title = QLabel("⚠️  Error Frames CAN")
+        lbl_title = QLabel("Error Frames CAN")
         lbl_title.setStyleSheet(
             "color: #f59e0b; font-weight: bold; font-size: 15px;"
         )
@@ -80,7 +80,7 @@ class ErrorTab(QWidget):
         self.lbl_count = QLabel("Total de erros: 0")
         self.lbl_count.setStyleSheet("color: #e83f5b; font-weight: bold; font-size: 12px;")
 
-        self.btn_clear = QPushButton("🧹  Limpar")
+        self.btn_clear = QPushButton("Limpar")
         self.btn_clear.setToolTip("Remove todos os erros da tabela e zera o contador")
         self.btn_clear.setStyleSheet(
             "QPushButton { background-color: #3f3f46; color: white; padding: 5px 14px;"

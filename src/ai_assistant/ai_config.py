@@ -16,7 +16,8 @@ DEFAULT_CONFIG = {
     "model": "gemini-1.5-flash",
     "custom_endpoint": "",
     "temperature": 0.3,
-    "max_tokens": 4096
+    "max_tokens": 4096,
+    "capture_duration": 3.0
 }
 
 def load_ai_config() -> dict:

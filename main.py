@@ -20,6 +20,60 @@ from __future__ import annotations
 
 import sys
 import os
+import subprocess
+
+def _check_dependencies():
+    missing = []
+    try:
+        import PyQt6
+    except ImportError:
+        missing.append("PyQt6")
+    try:
+        import can
+    except ImportError:
+        missing.append("python-can")
+    try:
+        import serial
+    except ImportError:
+        missing.append("pyserial")
+
+    if missing:
+        print("=" * 60)
+        print("          CANweaver - Pré-requisitos ausentes!          ")
+        print("=" * 60)
+        print("Os seguintes pacotes necessários não foram encontrados:")
+        for pkg in missing:
+            print(f"  - {pkg}")
+        print("\nPara instalar todas as dependências:")
+        print("  pip install -r requirements.txt")
+        print("Ou utilize os launchers automáticos:")
+        print("  Linux / macOS:  ./run.sh")
+        print("  Windows:        run.bat")
+        print("=" * 60)
+
+        # Se for um terminal interativo, oferece instalação imediata
+        if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+            try:
+                ans = input("\nDeseja que o CANweaver tente instalar as dependências agora? [S/n]: ").strip().lower()
+                if ans in ("", "s", "sim", "y", "yes"):
+                    print("Instalando dependências via pip...")
+                    req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+                    if os.path.exists(req_path):
+                        cmd = [sys.executable, "-m", "pip", "install", "-r", req_path]
+                    else:
+                        cmd = [sys.executable, "-m", "pip", "install", "PyQt6>=6.4.0", "python-can>=4.2.0", "pyserial>=3.5"]
+                    ret = subprocess.call(cmd)
+                    if ret == 0:
+                        print("Dependências instaladas com sucesso! Reiniciando aplicativo...")
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
+                    else:
+                        print("[ERRO] Falha ao instalar dependências.")
+            except Exception:
+                pass
+        sys.exit(1)
+
+_check_dependencies()
+
 import re
 import csv
 import time
@@ -52,7 +106,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("CANweaver 0.1b - AI Assisted CAN Reverse Engineering")
+        self.setWindowTitle(f"CANweaver v{__version__} - AI Assisted CAN Reverse Engineering")
         icon_path = os.path.join(BASE_DIR, "assets", "ico.ico")
         self.setWindowIcon(QIcon(icon_path))
         self.resize(1280, 720)
@@ -161,23 +215,23 @@ class MainWindow(QMainWindow):
         # ── Menu Conexão ─────────────────────────────────────────────
         menu_conn = menubar.addMenu("Conexão")
 
-        action_connect = QAction("🔌  Conectar ao Barramento...", self)
+        action_connect = QAction("Conectar ao Barramento...", self)
         action_connect.triggered.connect(self._open_connection_dialog)
         menu_conn.addAction(action_connect)
 
-        action_autodetect = QAction("🔍  Descobrir Barramento (Auto-Baudrate)...", self)
+        action_autodetect = QAction("Descobrir Barramento (Auto-Baudrate)...", self)
         action_autodetect.triggered.connect(self._open_bus_discovery_dialog)
         menu_conn.addAction(action_autodetect)
 
         menu_conn.addSeparator()
 
-        action_clear_stale = QAction("🧹  Limpar IDs Inativos...", self)
+        action_clear_stale = QAction("Limpar IDs Inativos...", self)
         action_clear_stale.setToolTip("Remove da tabela os IDs que não estão mais sendo transmitidos (sem frames há mais de 5 s)")
         action_clear_stale.triggered.connect(self._clear_stale_ids)
         menu_conn.addAction(action_clear_stale)
 
         # ── Menu CAN Copilot (IA) ────────────────────────────────────
-        menu_ai = menubar.addMenu("🤖 CAN Copilot")
+        menu_ai = menubar.addMenu("CAN Copilot")
 
         self.copilot_dock = QDockWidget("CAN Copilot (Assistente IA)", self)
         self.copilot_dock.setObjectName("CANCopilotDock")
@@ -187,17 +241,17 @@ class MainWindow(QMainWindow):
         self.copilot_dock.hide()
 
         action_toggle_copilot = self.copilot_dock.toggleViewAction()
-        action_toggle_copilot.setText("💬  Exibir / Ocultar Painel do Copilot")
+        action_toggle_copilot.setText("Exibir / Ocultar Painel do Copilot")
         action_toggle_copilot.setShortcut("Ctrl+I")
         menu_ai.addAction(action_toggle_copilot)
 
         menu_ai.addSeparator()
 
-        action_ai_config = QAction("🔑  Configurar Chave de API & Modelo...", self)
+        action_ai_config = QAction("Configurar Chave de API & Modelo...", self)
         action_ai_config.triggered.connect(self._open_ai_config_dialog)
         menu_ai.addAction(action_ai_config)
 
-        action_clear_ai = QAction("🧹  Limpar Contexto da Conversa", self)
+        action_clear_ai = QAction("Limpar Contexto da Conversa", self)
         action_clear_ai.triggered.connect(self.copilot_panel.clear_context)
         menu_ai.addAction(action_clear_ai)
 
@@ -209,7 +263,7 @@ class MainWindow(QMainWindow):
         corner_layout.setContentsMargins(0, 0, 8, 0)
         corner_layout.setSpacing(8)
 
-        self.btn_record = QPushButton("⏺  Gravar")
+        self.btn_record = QPushButton("Gravar")
         self.btn_record.setCheckable(True)
         self.btn_record.clicked.connect(self._toggle_recording)
         self.btn_record.setMinimumWidth(90)
@@ -224,13 +278,13 @@ class MainWindow(QMainWindow):
             "color: #a1a1aa; font-weight: bold; font-size: 11px; padding: 0 4px;"
         )
 
-        self.btn_about = QPushButton("ℹ️")
+        self.btn_about = QPushButton("Sobre")
         self.btn_about.setToolTip("Sobre o CANweaver")
         self.btn_about.clicked.connect(self._show_about)
         self.btn_about.setStyleSheet(
-            "QPushButton { background: transparent; color: #3b82f6; font-size: 16px;"
-            " border: none; padding: 0 4px; }"
-            "QPushButton:hover { color: #60a5fa; }"
+            "QPushButton { background-color: #2e3035; color: #93c5fd; font-size: 11px; font-weight: bold;"
+            " border: 1px solid #3b82f6; border-radius: 4px; padding: 4px 8px; }"
+            "QPushButton:hover { background-color: #1d4ed8; color: white; }"
         )
 
         corner_layout.addWidget(self.btn_record)
@@ -244,7 +298,7 @@ class MainWindow(QMainWindow):
         tab_widget.addTab(self.analysis_tab, "Análise (Sniffer)")
         tab_widget.addTab(self.transmit_tab, "Transmitir")
         tab_widget.addTab(self.widgets_tab, "Widgets")
-        tab_widget.addTab(self.error_tab, "⚠️ Erros CAN")
+        tab_widget.addTab(self.error_tab, "Erros CAN")
         
         central_master = QWidget()
         central_layout = QVBoxLayout(central_master)
@@ -624,10 +678,11 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_status.setText("Simulado")
 
-        # Atualizar referência da thread nas abas
+        # Atualizar referência da thread nas abas e painéis
         self.analysis_tab.can_thread = self.can_thread
         self.transmit_tab.can_thread = self.can_thread
         self.widgets_tab.can_thread = self.can_thread
+        self.copilot_panel.set_worker(self.can_thread)
 
         self.can_thread.frame_received.connect(self.analysis_tab.process_can_frame)
         self.can_thread.frame_received.connect(self.widgets_tab._broadcast_can_frame)
@@ -635,9 +690,12 @@ class MainWindow(QMainWindow):
         self.can_thread.error_frame_received.connect(self.error_tab.add_error_frame)
         self.can_thread.error_frame_received.connect(self.analysis_tab.on_error_frame)
         
+        if getattr(self, "is_recording", False):
+            self.can_thread.frame_received.connect(self._record_frame)
+
         if config["mode"] == "PLAYBACK":
             self.player_bar.show()
-            self.lbl_player_info.setText(f"▶ Reproduzindo: {os.path.basename(config['playback_file'])}")
+            self.lbl_player_info.setText(f"Reproduzindo: {os.path.basename(config['playback_file'])}")
             self.can_thread.playback_progress.connect(self._update_slider)
         else:
             self.player_bar.hide()
@@ -657,9 +715,9 @@ class MainWindow(QMainWindow):
             self.lbl_player_progress.setText(f"{pct}%")
             
             if current == 0 and pct == 0:
-                self.lbl_player_info.setText("🔄 Reiniciando (Loop)..." if getattr(self.can_thread, 'playback_loop', False) else "▶ Iniciando...")
+                self.lbl_player_info.setText("Reiniciando (Loop)..." if getattr(self.can_thread, 'playback_loop', False) else "Iniciando...")
             elif current > 0:
-                self.lbl_player_info.setText(f"▶ {current}/{total} frames")
+                self.lbl_player_info.setText(f"Reproduzindo {current}/{total} frames")
 
     def _handle_worker_error(self, err_msg: str):
         QMessageBox.warning(self, "Aviso da Thread", err_msg)
@@ -684,7 +742,7 @@ class MainWindow(QMainWindow):
                 old_txt = self.lbl_status.text().replace(" [REC]", "")
                 self.lbl_status.setText(old_txt + " [REC]")
                 self.record_timer.start(1000)
-                self.btn_record.setText("⏹  REC")
+                self.btn_record.setText("Parar REC")
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Falha ao criar cache de gravação:\n{e}")
                 self.btn_record.setChecked(False)

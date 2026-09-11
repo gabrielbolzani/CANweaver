@@ -2,77 +2,156 @@
   <img src="assets/ico.ico" alt="CANweaver Logo" width="120" />
 
   # CANweaver v2.0
-  **AI Assisted CAN Reverse Engineering**
+  **AI Assisted CAN Reverse Engineering & Automotive Hacking Suite**
 </div>
 
 ---
 
-O **CANweaver** é uma ferramenta gráfica avançada desenvolvida em Python e PyQt6 para análise, simulação e injeção de pacotes em redes CAN (Controller Area Network). Projetado com foco em hacking automotivo, engenharia reversa e telemetria, ele transforma a leitura do caos hexadecimal em uma interface elegante, escura e extremamente dinâmica.
+O **CANweaver** é uma plataforma gráfica avançada em Python e PyQt6 para análise, telemetria, simulação, injeção de pacotes e engenharia reversa assistida por Inteligência Artificial em redes CAN (Controller Area Network).
+
+Desenvolvido para entusiastas, pesquisadores de cibersegurança veicular e desenvolvedores automotivos, o CANweaver transforma o fluxo hexadecimal de dados em uma experiência visual intuitiva, escura e extremamente dinâmica.
+
+---
 
 ## 🚀 Principais Funcionalidades
 
-### 🔍 Aba de Análise (Sniffer)
-A aba principal do sistema onde você disseca o tráfego em tempo real.
-- **Grid Dinâmico e Colorido:** As mensagens capturadas são alinhadas de forma organizada em uma tabela de alta performance. Quando um byte muda de valor, a célula correspondente pisca em azul para que seus olhos capturem a alteração instantaneamente.
-- **Filtros Inteligentes:** Oculte mensagens estáticas que não estão sofrendo alteração ou oculte IDs inativos (mensagens que pararam de ser transmitidas pela rede). Isso permite focar puramente nos módulos que estão reagindo aos seus comandos físicos.
-- **Sistema de Comentários Nativos:** Selecione e clique com o botão direito em um ID, byte ou até mesmo em um bit individual para adicionar comentários (`Shift+Enter`). Todas as anotações se transformam em bordas amarelas na tabela, servindo como uma "trilha de migalhas" visual para o seu progresso no hacking.
-- **Geração de Markdown:** Todos os comentários feitos na tabela alimentam silenciosa e automaticamente um arquivo `CANweaver_Projeto.md`, gerando a documentação completa da sua engenharia reversa sem que você precise digitar um relatório do zero.
+### 🔍 Aba de Análise (Sniffer em Tempo Real)
+A central de monitoramento onde o tráfego é dissecado ao vivo:
+- **Grid Dinâmico e Reativo:** Mensagens alinhadas por ID em tabela de alta performance. Células que sofrem alteração piscam em azul instantaneamente.
+- **Filtros Inteligentes:** Oculte mensagens estáticas que não variam ou remova IDs inativos (que pararam de transmitir há mais de 5 segundos).
+- **Sistema de Anotações Nativo:** Clique com o botão direito em um ID, byte ou bit para adicionar comentários (`Shift+Enter`). Anotações ganham bordas amarelas de destaque.
+- **Documentação Automática:** Comentários alimentam em segundo plano o arquivo `CANweaver_Projeto.md`, gerando o relatório técnico da engenharia reversa automaticamente.
 
 <img src="assets/recursos/doc_images/Tela_Analise.png" alt="Tela de Análise" width="800"/>
 <br>
 <img src="assets/recursos/doc_images/Arquivo_gerado_pela_Tela_Analise.png" alt="Markdown Gerado Automaticamente" width="800"/>
 
-### 🥷 Aba de Transmissão (Injeção e Fuzzing)
-O centro de controle para injetar dados de volta no barramento.
-- **Single-Shot Pulse:** Dispare frames customizados instantaneamente (ID e Dados).
-- **Transmissão Periódica:** Configure uma gama de mensagens em uma "playlist" e escolha exatamente a frequência desejada (ex: `10 Hz` = envio a cada 100ms). O software garante a estabilidade de envio cíclico.
-- **Pausa Cirúrgica:** Pause e retome a transmissão de qualquer mensagem da sua lista individualmente, com 1 clique, sem precisar parar o tráfego inteiro.
+---
 
-<img src="assets/recursos/doc_images/Tela_de_Envio.png" alt="Tela de Transmissão" width="800"/>
-
-### 🎛️ Aba de Widgets (Dashboard Customizado)
-Transforme endereços hexadecimais em um painel veicular interativo completo, como se estivesse jogando um simulador.
-- **Canvas Livre:** Uma área de edição destravável com função de exibição de grade geométrica (com eixos centrais) para alinhar visualmente seus componentes perfeitamente.
-- **Componentes Visuais Ricos:** 
-  - **Gauges Analógicos:** Crie velocímetros ou conta-giros. Suportam conversão complexa de tamanhos variáveis (de 1 a 4 bytes de payload simultâneo), conversão bruta para valores escalados via Fator Decimal de Float e redimensionamento infinito via menu. Múltiplos estilos visuais (Arco, Barras e Texto Livre).
-  - **Indicadores (LEDs e Texto):** Leia bits específicos. Um LED pode acender verde se o Freio de Mão foi ativado no bit 3 do byte 0 da mensagem 0x300.
-  - **Controladores (Botões):** Insira botões interativos para enviar comandos para a rede (modos de click/toggle/pulso) imitando comandos do volante.
-  - **Labels Livres:** Títulos bonitos para decorar e setorizar o seu painel de controle.
-
-<img src="assets/recursos/doc_images/Tela_Widgets.png" alt="Tela de Widgets" width="800"/>
-
-### 📼 Gravação, Playback e Autosave
-- **Player Automático:** Grave o fluxo da rede diretamente para o disco através do botão "Gravar". Volte depois e abra a ferramenta em modo "Playback". O programa exibirá uma barra inferior ("Player Bar") com controle preciso da linha do tempo do arquivo, mostrando a porcentagem do progresso e fazendo o replay num loop limpo para os seus widgets atuarem offline.
-- **Sistema Inteligente de Resgate (Autosave):** Esqueceu de salvar e perdeu energia? O sistema roda um backup em background a cada 30 segundos em `autosave.cwp`. Quando reabrir o programa, ele oferecerá recuperar totalmente as suas janelas, layouts, tarefas de transmissão e comentários como mágica.
-- **Salvar Como (`.cwp`):** Salve um projeto inteiro (Dashboards, Listas de Transmissão e Docs Markdown) empacotados em 1 único arquivo `.cwp` para compartilhar o progresso daquele carro com amigos.
-
-<img src="assets/recursos/doc_images/Status_Playback.png" alt="Barra do Player de Playback" width="800"/>
+### 🤖 CAN Copilot (Assistente de Engenharia Reversa com IA)
+Um copiloto integrado com modelos de linguagem (Google Gemini, OpenAI GPT-4o, Ollama/Local) para acelerar a identificação de sinais:
+- **Gravação de Ações Físicas:** Acione o botão de gravação (com duração configurável de 1 a 60 segundos) e realize um comando no veículo (ex: *pisar no freio*, *acionar seta*). O assistente calcula os deltas de bytes, alternâncias de bits (bit flips) e frequências.
+- **Sugestão e Criação de Widgets:** Com 1 clique no chat, crie medidores (Gauges), botões ou LEDs no seu Dashboard sugeridos pela IA.
+- **Aplicação de Filtros:** Deixe a IA identificar os IDs relevantes e aplicar o filtro de isolamento na tabela com um toque.
+- **Análise de Arquivos:** Anexe logs de captura, especificações DBC, CSVs ou notas para interpretação do protocolo.
+- **Segurança de Dados:** Suas chaves de API e configurações são salvas exclusivamente na sua máquina local (`~/.canweaver/ai_config.json`) e nunca são enviadas a repositórios Git.
 
 ---
 
-## 🛠️ Tecnologias e Bibliotecas
+### 🥷 Aba de Transmissão (Injeção e Fuzzing)
+Centro de controle para transmissão e injeção de pacotes no barramento:
+- **Single-Shot Pulse:** Dispare frames customizados instantaneamente (ID e Dados em HEX/BIN).
+- **Transmissão Cíclica / Playlist:** Configure múltiplos pacotes e ajuste a frequência de envio desejada (ex: `10 Hz`, `50 Hz`, `100 Hz`).
+- **Controle Individual:** Pause e retome transmissões individualmente sem interromper as demais mensagens.
 
-- **[Python 3.10+]**
-- **[PyQt6]** - O coração gráfico da arquitetura.
-- **[python-can]** - Para comunicação física robusta via adaptadores USB (suporta SocketCAN, SLCAN, Vector, Kvaser, etc).
-- **[pyserial]** - Escaneamento automático de interfaces COM/ttyUSB.
+<img src="assets/recursos/doc_images/Tela_de_Envio.png" alt="Tela de Transmissão" width="800"/>
 
-## ⚙️ Como Iniciar
+---
 
-1. Clone o repositório:
-   ```bash
-   git clone https://github.com/gabrielbolzani/CANweaver.git
-   ```
-2. Instale as dependências:
-   ```bash
-   pip install PyQt6 python-can pyserial
-   ```
-3. Execute o programa:
-   ```bash
-   python main.py
-   ```
+### 🎛️ Aba de Widgets (Dashboard Automotivo Customizado)
+Construa dashboards interativos em um canvas livre estilo cockpit:
+- **Gauges Analógicos e Digitais:** Medidores estilo arco, barras e mostrador numérico com suporte a escala por fator decimal float e múltiplos bytes.
+- **Indicadores de Estado e LEDs:** Monitoramento bit a bit com lógica de cores para alarmes e flags veiculares.
+- **Controladores Interativos:** Botões e sliders (click, toggle, pulso e incremento) para injetar comandos interativamente.
+- **Terminal CAN Integrado:** Exibição rápida de tráfego filtrado em janela flutuante no próprio painel.
+- **Grade e Snap Magnético:** Alinhamento preciso dos elementos visuais e ajuste inteligente à largura de tela.
 
-> **Aviso de Simulação:** Se você não tiver um adaptador conectado, o CANweaver inicializa vazio. Vá em `Conectar...`, altere o modo para **Simulado** e pronto: A engine carregará o `simulator.py` que cria dados hiper-realistas na rede (um motor ligando, ondas senoidais acelerando e LEDs de pisca/alerta interagindo para você testar todos os Widgets sem risco!)
+<img src="assets/recursos/doc_images/Tela_Widgets.png" alt="Tela de Widgets" width="800"/>
 
-## 📜 Licença e Contribuição
-Este é um projeto para entusiastas e pesquisadores de Cyber Segurança Veicular. Hackeie com responsabilidade e mantenha o cinto de segurança apertado.
+---
+
+### 📼 Gravação, Playback e Autosave
+- **Gravação em CSV:** Salve sessões completas de tráfego com timestamp de microssegundos e DLC.
+- **Player de Reprodução (Playback):** Carregue gravações prévias e reproduza com barra de controle de tempo, seek e repetição em loop.
+- **Autosave Inteligente:** Backup contínuo a cada 30 segundos em `autosave.cwp` para proteção contra quedas de energia.
+- **Projetos Empacotados (`.cwp`):** Exporte e compartilhe seu projeto completo (Dashboards, listas de transmissão e documentação) em um único arquivo.
+
+---
+
+## 🛠️ Tecnologias e Pré-Requisitos
+
+### Dependências Principais:
+- **Python 3.10 ou superior**
+- **PyQt6 (>= 6.4.0)** — Interface gráfica de alta performance.
+- **python-can (>= 4.2.0)** — Comunicação com adaptadores CAN (SocketCAN, SLCAN, Vector, PCAN, Kvaser, etc.).
+- **pyserial (>= 3.5)** — Suporte a adaptadores seriais/USB (SLCAN, CANable).
+
+### Pré-Requisitos de Sistema (Linux):
+Em sistemas Linux (como Ubuntu, Debian, Raspberry Pi OS ou Fedora), certifique-se de que as bibliotecas gráficas do Qt estão presentes:
+```bash
+# Ubuntu / Debian / Pop!_OS
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip libxcb-cursor0 libgl1 libegl1
+```
+
+---
+
+## ⚙️ Instalação e Execução
+
+O CANweaver inclui scripts de auto-inicialização que criam o ambiente virtual (`.venv`) e instalam as dependências automaticamente caso ainda não estejam presentes.
+
+### No Linux / macOS / WSL:
+```bash
+git clone https://github.com/gabrielbolzani/CANweaver.git
+cd CANweaver
+chmod +x run.sh
+./run.sh
+```
+
+### No Windows:
+Dê um duplo-clique no arquivo **`run.bat`** ou execute via terminal (PowerShell / Prompt de Comando):
+```bat
+git clone https://github.com/gabrielbolzani/CANweaver.git
+cd CANweaver
+run.bat
+```
+
+### Instalação Manual (Opcional):
+Caso prefira gerenciar o ambiente manualmente:
+```bash
+python -m venv .venv
+# Ativar venv:
+# Linux/macOS: source .venv/bin/activate
+# Windows:     .venv\Scripts\activate
+
+pip install -r requirements.txt
+python main.py
+```
+
+---
+
+## 🔌 Conexão com Hardware Real (CANable, SocketCAN, SLCAN)
+
+O CANweaver suporta os adaptadores mais populares do mercado:
+
+### 1. Adaptadores CANable / CandleLight
+- **No Linux com Firmware CandleLight (Nativo):**
+  O CANable com firmware candleLight cria uma interface `can0` nativa no kernel Linux. Conecte-se selecionando a interface `socketcan` e canal `can0`.
+  *(O CANweaver pode subir a interface automaticamente através do menu de conexão).*
+- **No Linux com Firmware SLCAN:**
+  O dispositivo aparece como `/dev/ttyACM0` ou `/dev/ttyUSB0`. Para ter permissão de acesso à porta serial sem precisar de `sudo`:
+  ```bash
+  sudo usermod -aG dialout $USER
+  # (Faça logout e login novamente para aplicar)
+  ```
+- **No Windows (SLCAN):**
+  O CANable aparece como uma porta `COM` (ex: `COM3`, `COM4`). Na janela de conexão, selecione a interface `slcan`, e as portas disponíveis serão listadas automaticamente.
+
+### 2. Descoberta Automática de Velocidade (Auto-Baudrate)
+Se você não sabe a taxa de transmissão da rede do veículo (ex: 500 kbps, 250 kbps, 125 kbps):
+1. Vá em **Conexão** -> **Descobrir Barramento (Auto-Baudrate)...**
+2. Selecione a interface e canal do seu hardware.
+3. Clique em **Iniciar Busca**. O sistema varre as frequências padrão em modo *listen-only* e exibe a taxa exata assim que frames forem capturados.
+
+### 3. Modo Simulado (Sem Hardware)
+Não possui um adaptador conectado no momento?
+Abra **Conexão** -> **Conectar ao Barramento...**, selecione **Modo Simulado** e clique em **Conectar**. O motor integrado simula dados veiculares realistas (RPM acelerando, velocidade, temperatura e luzes indicadoras) para você testar todos os recursos imediatamente.
+
+---
+
+## 📜 Licença e Responsabilidade
+
+Este software é destinado a testes, diagnóstico veicular, pesquisa e engenharia reversa ética de redes automotivas.
+- É proibida a comercialização não autorizada deste software.
+- Mantenha sempre o crédito aos autores originais em quaisquer forks ou modificações.
+- Teste com segurança e mantenha a atenção no veículo.

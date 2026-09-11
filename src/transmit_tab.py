@@ -59,7 +59,7 @@ class TransmitTab(QWidget):
         self.cb_single_format.addItems(["HEX", "BIN"])
         self.txt_single_data = QLineEdit()
         self.txt_single_data.setPlaceholderText("Dados (Ex: FF 00 1A)")
-        self.btn_single_send = QPushButton("🚀 Transmitir Pulso")
+        self.btn_single_send = QPushButton("Transmitir Pulso")
         self.btn_single_send.setStyleSheet("background-color: #4e44dd; color: white; padding: 6px; border-radius: 4px;")
         self.btn_single_send.clicked.connect(self.send_single_shot)
 

@@ -176,9 +176,9 @@ class ExportDialog(QDialog):
         ext_map = {"annotations": ".md", "transmit": ".json", "dashboard": ".json"}
         if len(checked) == 1:
             ext = ext_map[checked[0]]
-            self.lbl_hint.setText(f"💡 Apenas 1 item selecionado — será salvo diretamente como {ext}")
+            self.lbl_hint.setText(f"Apenas 1 item selecionado — será salvo diretamente como {ext}")
         else:
-            self.lbl_hint.setText("💡 Múltiplos itens — serão compactados em .cwp")
+            self.lbl_hint.setText("Múltiplos itens — serão compactados em .cwp")
 
     def get_selection(self):
         return {
@@ -267,7 +267,7 @@ class BusScannerThread(QThread):
 
     def run(self):
         total = len(self.CANDIDATE_BITRATES)
-        self.log_message.emit(f"🔍 Iniciando varredura na interface '{self.interface}' (canal: {self.channel})...")
+        self.log_message.emit(f"Iniciando varredura na interface '{self.interface}' (canal: {self.channel})...")
 
         for idx, rate in enumerate(self.CANDIDATE_BITRATES):
             if not self.running:
@@ -276,7 +276,7 @@ class BusScannerThread(QThread):
 
             rate_kbps = rate / 1000.0
             self.progress_updated.emit(idx + 1, total, rate, f"Testando {rate_kbps:.1f} kbps ({rate} bps)...")
-            self.log_message.emit(f"\n⏱ [{idx+1}/{total}] Testando {rate_kbps:.1f} kbps ({rate} bps)...")
+            self.log_message.emit(f"\n[{idx+1}/{total}] Testando {rate_kbps:.1f} kbps ({rate} bps)...")
 
             if self.interface == "socketcan" and self.auto_up:
                 ok, up_msg = bring_up_socketcan(self.channel, rate, self.listen_only)
@@ -292,7 +292,7 @@ class BusScannerThread(QThread):
                     receive_own_messages=False
                 )
             except Exception as e:
-                self.log_message.emit(f"   ❌ Falha ao inicializar can.Bus: {e}")
+                self.log_message.emit(f"   [FALHA] Falha ao inicializar can.Bus: {e}")
                 continue
 
             frames_count = 0
@@ -311,7 +311,7 @@ class BusScannerThread(QThread):
                             if frames_count >= 2:
                                 break
             except Exception as e:
-                self.log_message.emit(f"   ⚠️ Erro ao receber frames: {e}")
+                self.log_message.emit(f"   [AVISO] Erro ao receber frames: {e}")
             finally:
                 try:
                     bus.shutdown()
@@ -321,7 +321,7 @@ class BusScannerThread(QThread):
             if frames_count > 0:
                 id_sample = list(unique_ids)[:6]
                 self.log_message.emit(
-                    f"   ✅ SUCESSO! {frames_count} frame(s) válido(s) capturado(s) a {rate_kbps:.1f} kbps!"
+                    f"   [OK] SUCESSO! {frames_count} frame(s) válido(s) capturado(s) a {rate_kbps:.1f} kbps!"
                 )
                 self.log_message.emit(f"   ↳ IDs detectados: {', '.join(id_sample)}")
                 self.baudrate_found.emit(rate, frames_count, id_sample)
@@ -405,16 +405,16 @@ class BusDiscoveryDialog(QDialog):
 
         # Botões de Ação
         btn_layout = QHBoxLayout()
-        self.btn_start = QPushButton("▶ Iniciar Busca")
+        self.btn_start = QPushButton("Iniciar Busca")
         self.btn_start.setStyleSheet("background-color: #3b82f6; color: white; padding: 8px 16px; border-radius: 4px; font-weight: bold;")
         self.btn_start.clicked.connect(self._start_scan)
 
-        self.btn_stop = QPushButton("⏹ Parar")
+        self.btn_stop = QPushButton("Parar")
         self.btn_stop.setEnabled(False)
         self.btn_stop.setStyleSheet("background-color: #ef4444; color: white; padding: 8px 16px; border-radius: 4px;")
         self.btn_stop.clicked.connect(self._stop_scan)
 
-        self.btn_apply = QPushButton("🔌 Conectar nesta Velocidade")
+        self.btn_apply = QPushButton("Conectar nesta Velocidade")
         self.btn_apply.setEnabled(False)
         self.btn_apply.setStyleSheet("background-color: #10b981; color: white; padding: 8px 16px; border-radius: 4px; font-weight: bold;")
         self.btn_apply.clicked.connect(self.accept)
@@ -461,7 +461,7 @@ class BusDiscoveryDialog(QDialog):
     def _stop_scan(self):
         if self.scanner_thread and self.scanner_thread.isRunning():
             self.scanner_thread.stop()
-            self._on_log("\n⚠️ Solicitada interrupção da busca...")
+            self._on_log("\n[AVISO] Solicitada interrupção da busca...")
 
     def _on_progress(self, current, total, bitrate, msg):
         pct = int((current / total) * 100)
@@ -475,7 +475,7 @@ class BusDiscoveryDialog(QDialog):
     def _on_baudrate_found(self, bitrate, count, sample_ids):
         self.detected_bitrate = bitrate
         rate_kbps = bitrate / 1000.0
-        self.lbl_status.setText(f"🎯 Sucesso! {rate_kbps:.1f} kbps detectado ({count} frames)")
+        self.lbl_status.setText(f"Sucesso! {rate_kbps:.1f} kbps detectado ({count} frames)")
         self.lbl_status.setStyleSheet("font-weight: bold; color: #10b981;")
         self.progress_bar.setValue(100)
         self.btn_apply.setEnabled(True)
@@ -535,6 +535,7 @@ class ConnectionDialog(QDialog):
 
         self.cb_interface = QComboBox()
         self.cb_interface.addItems(["socketcan", "slcan", "vector", "virtual", "ixxat", "pcan"])
+        self.cb_interface.currentIndexChanged.connect(self._on_interface_changed)
 
         self.txt_channel = QLineEdit("can0")
         self.txt_channel.setPlaceholderText("ex: can0, COM3, /dev/ttyUSB0")
@@ -543,7 +544,7 @@ class ConnectionDialog(QDialog):
         self.cb_bitrate.addItems(["500000", "250000", "125000", "1000000", "100000", "50000", "20000"])
         self.cb_bitrate.setCurrentText("500000")
 
-        self.btn_autodetect = QPushButton("🔍 Descobrir Barramento (Auto-Baudrate)...")
+        self.btn_autodetect = QPushButton("Descobrir Barramento (Auto-Baudrate)...")
         self.btn_autodetect.setStyleSheet("background-color: #1e3a5f; color: white; padding: 6px; border-radius: 4px;")
         self.btn_autodetect.clicked.connect(self._open_autodetect)
 
@@ -572,6 +573,28 @@ class ConnectionDialog(QDialog):
         self.layout.addRow(self.btn_connect)
 
         self.on_mode_change(0)
+        self._on_interface_changed()
+
+    def _on_interface_changed(self):
+        """Auxilia na detecção de portas para interfaces seriais como SLCAN (CANable)."""
+        iface = self.cb_interface.currentText()
+        if iface == "slcan":
+            try:
+                import serial.tools.list_ports
+                ports = [p.device for p in serial.tools.list_ports.comports()]
+                if ports:
+                    cur = self.txt_channel.text().strip()
+                    if not cur or cur == "can0":
+                        self.txt_channel.setText(ports[0])
+                    self.txt_channel.setPlaceholderText(f"Portas detectadas: {', '.join(ports)}")
+                else:
+                    self.txt_channel.setPlaceholderText("ex: COM3 (Win) ou /dev/ttyACM0 (Linux)")
+            except Exception:
+                self.txt_channel.setPlaceholderText("ex: COM3 ou /dev/ttyACM0")
+        elif iface == "socketcan":
+            self.txt_channel.setPlaceholderText("ex: can0, can1, vcan0")
+            if not self.txt_channel.text() or self.txt_channel.text().startswith("COM"):
+                self.txt_channel.setText("can0")
 
     def _open_autodetect(self):
         dlg = BusDiscoveryDialog(

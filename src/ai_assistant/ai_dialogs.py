@@ -30,7 +30,7 @@ class AIConfigDialog(QDialog):
         layout.setSpacing(12)
 
         # Cabeçalho explicativo
-        hdr = QLabel("🤖 <b>CAN Copilot — Configuração de IA</b>")
+        hdr = QLabel("<b>CAN Copilot — Configuração de IA</b>")
         hdr.setStyleSheet("font-size: 14px; color: #38bdf8;")
         
         info = QLabel(
@@ -72,8 +72,8 @@ class AIConfigDialog(QDialog):
         self.txt_api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.txt_api_key.setPlaceholderText("Cole sua Chave de API aqui...")
 
-        self.btn_toggle_echo = QPushButton("👁️")
-        self.btn_toggle_echo.setFixedWidth(36)
+        self.btn_toggle_echo = QPushButton("Exibir")
+        self.btn_toggle_echo.setFixedWidth(56)
         self.btn_toggle_echo.setToolTip("Exibir/Ocultar chave")
         self.btn_toggle_echo.clicked.connect(self._toggle_echo)
 
@@ -83,7 +83,7 @@ class AIConfigDialog(QDialog):
 
         # Link para obter chave
         link_layout = QHBoxLayout()
-        self.btn_get_key = QPushButton("🔗 Obter Chave Gratuita do Google AI Studio")
+        self.btn_get_key = QPushButton("Obter Chave Gratuita no Google AI Studio")
         self.btn_get_key.setStyleSheet(
             "QPushButton { background: transparent; color: #60a5fa; text-decoration: underline; border: none; text-align: left; }"
             "QPushButton:hover { color: #93c5fd; }"
@@ -110,6 +110,14 @@ class AIConfigDialog(QDialog):
         self.sp_temp.setValue(float(self.cfg.get("temperature", 0.3)))
         form.addRow("Temperatura (0=Determinístico, 1=Criativo):", self.sp_temp)
 
+        # Duração da gravação de comandos CAN
+        self.sp_duration = QDoubleSpinBox()
+        self.sp_duration.setRange(1.0, 60.0)
+        self.sp_duration.setSingleStep(0.5)
+        self.sp_duration.setSuffix(" s")
+        self.sp_duration.setValue(float(self.cfg.get("capture_duration", 3.0)))
+        form.addRow("Duração da Gravação de Ação (s):", self.sp_duration)
+
         layout.addLayout(form)
 
         # Atualiza lista de modelos para o provedor selecionado
@@ -124,7 +132,7 @@ class AIConfigDialog(QDialog):
 
         # Botões de Ação
         btn_row = QHBoxLayout()
-        self.btn_test = QPushButton("⚡ Testar Conexão")
+        self.btn_test = QPushButton("Testar Conexão")
         self.btn_test.setStyleSheet(
             "QPushButton { background-color: #1e3a5f; color: #93c5fd; padding: 6px 14px; border: 1px solid #1d4ed8; border-radius: 4px; font-weight: bold; }"
             "QPushButton:hover { background-color: #1d4ed8; color: white; }"
@@ -168,19 +176,19 @@ class AIConfigDialog(QDialog):
         if provider == "google_gemini":
             models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-3.6-flash"]
             self.cb_model.addItems(models)
-            self.btn_get_key.setText("🔗 Obter Chave Gratuita do Google AI Studio (Gemini)")
+            self.btn_get_key.setText("Obter Chave Gratuita no Google AI Studio (Gemini)")
             self.txt_custom_endpoint.setEnabled(False)
             self.txt_custom_endpoint.setPlaceholderText("Padrão: Google AI Studio API Endpoint")
         elif provider == "openai":
             models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3-mini"]
             self.cb_model.addItems(models)
-            self.btn_get_key.setText("🔗 Obter Chave no OpenAI Platform")
+            self.btn_get_key.setText("Obter Chave no OpenAI Platform")
             self.txt_custom_endpoint.setEnabled(False)
             self.txt_custom_endpoint.setPlaceholderText("Padrão: https://api.openai.com/v1")
         else:
             models = ["llama-3.3-70b", "deepseek-r1", "mistral-large", "qwen-2.5-coder", "custom-model"]
             self.cb_model.addItems(models)
-            self.btn_get_key.setText("🔗 Ver documentação do endpoint customizado")
+            self.btn_get_key.setText("Ver documentação do endpoint customizado")
             self.txt_custom_endpoint.setEnabled(True)
             self.txt_custom_endpoint.setPlaceholderText("Ex: http://localhost:11434/v1")
 
@@ -199,7 +207,7 @@ class AIConfigDialog(QDialog):
             return
 
         self.btn_test.setEnabled(False)
-        self.btn_test.setText("⏳ Testando...")
+        self.btn_test.setText("Testando...")
 
         # Teste rápido assíncrono / direto usando urllib
         try:
@@ -239,7 +247,7 @@ class AIConfigDialog(QDialog):
             QMessageBox.critical(self, "Erro de Conexão", f"Falha ao conectar com o serviço de IA:\n{e}")
         finally:
             self.btn_test.setEnabled(True)
-            self.btn_test.setText("⚡ Testar Conexão")
+            self.btn_test.setText("Testar Conexão")
 
     def _save_and_accept(self):
         data = {
@@ -248,7 +256,8 @@ class AIConfigDialog(QDialog):
             "model": self.cb_model.currentText().strip(),
             "custom_endpoint": self.txt_custom_endpoint.text().strip(),
             "temperature": self.sp_temp.value(),
-            "max_tokens": 4096
+            "max_tokens": 4096,
+            "capture_duration": round(self.sp_duration.value(), 1)
         }
         if save_ai_config(data):
             self.accept()
