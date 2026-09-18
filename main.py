@@ -1,5 +1,7 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-main.py — Ponto de entrada do CANweaver v2.0
+main.py — Ponto de entrada do CANweaver
 
 Responsabilidade: criar a janela principal, montar a toolbar global
 (Conectar / Gravar) e as três abas. Toda a lógica pesada está nos módulos:

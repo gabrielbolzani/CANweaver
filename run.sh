@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "========================================================"
-echo "               CANweaver v2.0 Launcher                 "
+echo "                  CANweaver Launcher                    "
 echo "========================================================"
 
 # 1. Checagem de Python 3
@@ -25,35 +25,56 @@ fi
 
 # 2. Gerenciamento do Ambiente Virtual (.venv)
 VENV_DIR="$SCRIPT_DIR/.venv"
-if [ ! -d "$VENV_DIR" ]; then
-    echo "[INFO] Ambiente virtual não encontrado. Criando .venv..."
-    if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
-        echo "[AVISO] Falha ao criar venv com o módulo padrão."
-        echo "Em sistemas baseados em Debian/Ubuntu, instale o pacote python3-venv:"
-        echo "  sudo apt install -y python3-venv python3-pip"
-        echo "Tentando prosseguir sem venv..."
+
+# Se o .venv já existe, valida se ele realmente usa Python 3 e se não está corrompido
+if [ -d "$VENV_DIR" ]; then
+    if [ ! -f "$VENV_DIR/bin/python3" ] || ! "$VENV_DIR/bin/python3" -c "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)" 2>/dev/null; then
+        echo "[AVISO] Ambiente virtual existente em .venv é incompatível ou não é Python 3. Recriando..."
+        rm -rf "$VENV_DIR"
     fi
 fi
 
-if [ -f "$VENV_DIR/bin/activate" ]; then
-    source "$VENV_DIR/bin/activate"
-    PYTHON_EXEC="python"
-    PIP_EXEC="pip"
+if [ ! -d "$VENV_DIR" ]; then
+    echo "[INFO] Ambiente virtual não encontrado. Criando .venv com python3..."
+    if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
+        echo "[AVISO] Falha ao criar venv com python3 -m venv."
+        echo "Em sistemas baseados em Debian/Ubuntu, instale o pacote python3-venv:"
+        echo "  sudo apt install -y python3-venv python3-pip"
+        rm -rf "$VENV_DIR" 2>/dev/null || true
+        echo "Tentando prosseguir com python3 do sistema..."
+    fi
+fi
+
+if [ -f "$VENV_DIR/bin/python3" ]; then
+    PYTHON_EXEC="$VENV_DIR/bin/python3"
+    PIP_EXEC="$VENV_DIR/bin/pip"
+    if [ -f "$VENV_DIR/bin/activate" ]; then
+        # shellcheck disable=SC1091
+        source "$VENV_DIR/bin/activate"
+    fi
 else
-    PYTHON_EXEC="python3"
-    PIP_EXEC="pip3"
+    PYTHON_EXEC="$(command -v python3)"
+    PIP_EXEC="python3 -m pip"
+fi
+
+# Garante que PYTHON_EXEC é realmente Python 3
+PY_MAJOR=$($PYTHON_EXEC -c "import sys; print(sys.version_info[0])" 2>/dev/null || echo "0")
+if [ "$PY_MAJOR" -lt 3 ]; then
+    echo "[ERRO] Interpretador selecionado ($PYTHON_EXEC) não é Python 3!"
+    echo "CANweaver requer Python 3.10 ou superior."
+    exit 1
 fi
 
 # 3. Verificação e Instalação Automática de Dependências
-echo "[INFO] Verificando dependências..."
+echo "[INFO] Verificando dependências via $PYTHON_EXEC..."
 MISSING_DEPS=0
 $PYTHON_EXEC -c "import PyQt6" 2>/dev/null || MISSING_DEPS=1
 $PYTHON_EXEC -c "import can" 2>/dev/null || MISSING_DEPS=1
 $PYTHON_EXEC -c "import serial" 2>/dev/null || MISSING_DEPS=1
 
 if [ $MISSING_DEPS -ne 0 ]; then
-    echo "[INFO] Dependências ausentes detectadas. Instalando automaticamente via requirements.txt..."
-    $PIP_EXEC install --upgrade pip
+    echo "[INFO] Dependências ausentes detectadas. Instalando automaticamente..."
+    $PIP_EXEC install --upgrade pip 2>/dev/null || true
     if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
         $PIP_EXEC install -r "$SCRIPT_DIR/requirements.txt"
     else
@@ -75,6 +96,6 @@ if [ "$(uname)" = "Linux" ]; then
     fi
 fi
 
-# 5. Execução do CANweaver
-echo "[INFO] Iniciando CANweaver..."
-exec $PYTHON_EXEC "$SCRIPT_DIR/main.py" "$@"
+# 5. Execução do CANweaver com Python 3 garantido
+echo "[INFO] Iniciando CANweaver com $PYTHON_EXEC..."
+exec "$PYTHON_EXEC" "$SCRIPT_DIR/main.py" "$@"
