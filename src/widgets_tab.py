@@ -1547,6 +1547,7 @@ class IncrementalControllerWidget(DashboardWidget):
                 border-radius: 8px;
             }
         """)
+        self.setMinimumWidth(380)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -1682,7 +1683,7 @@ class IncrementalControllerWidget(DashboardWidget):
             """)
             ch_layout.addWidget(slider)
 
-            # Botões de Ação Rápida: [Min] [-Passo] [+Passo] [Max] + Ajuste de Passo
+            # Botões de Ação Rápida: [Min] [-Passo] [+Passo] [Max] + Ajuste de Passo + Valor Atual
             btn_row = QHBoxLayout()
             btn_row.setSpacing(4)
 
@@ -1707,13 +1708,40 @@ class IncrementalControllerWidget(DashboardWidget):
             sp_step.setFixedWidth(50)
             sp_step.setStyleSheet("QSpinBox { background-color: #1e1e24; color: white; border: 1px solid #3f3f46; border-radius: 3px; font-size: 10px; }")
 
+            lbl_val = QLabel("Valor:")
+            lbl_val.setStyleSheet("color: #a1a1aa; font-size: 10px; font-weight: bold;")
+
+            sp_val = QSpinBox()
+            sp_val.setRange(min_val, max_val)
+            sp_val.setValue(def_val)
+            sp_val.setKeyboardTracking(False)
+            sp_val.setFixedWidth(62)
+            sp_val.setToolTip(f"Valor do canal ({min_val} a {max_val}). Digite e pressione Enter para transmitir.")
+            sp_val.setStyleSheet(f"""
+                QSpinBox {{
+                    background-color: #1e1e24;
+                    color: #ffffff;
+                    border: 1px solid {color_hex};
+                    border-radius: 3px;
+                    font-size: 10px;
+                    font-weight: bold;
+                }}
+                QSpinBox:focus {{
+                    border: 1px solid #38bdf8;
+                    background-color: #27272a;
+                }}
+            """)
+
             btn_row.addWidget(btn_min)
             btn_row.addWidget(btn_dec)
             btn_row.addWidget(btn_inc)
             btn_row.addWidget(btn_max)
-            btn_row.addSpacing(4)
+            btn_row.addStretch()
             btn_row.addWidget(lbl_step)
             btn_row.addWidget(sp_step)
+            btn_row.addSpacing(6)
+            btn_row.addWidget(lbl_val)
+            btn_row.addWidget(sp_val)
 
             ch_layout.addLayout(btn_row)
             layout.addWidget(ch_frame)
@@ -1730,17 +1758,20 @@ class IncrementalControllerWidget(DashboardWidget):
                 "slider": slider,
                 "btn_dec": btn_dec,
                 "btn_inc": btn_inc,
-                "sp_step": sp_step
+                "sp_step": sp_step,
+                "sp_val": sp_val
             }
             self.channel_uis.append(ui_dict)
 
             idx = i
             slider.valueChanged.connect(lambda v, ch_i=idx: self._on_channel_value_changed(ch_i, v))
-            btn_min.clicked.connect(lambda _, ch_i=idx: self._set_channel_value(ch_i, self.channel_uis[ch_i]["min"]))
-            btn_max.clicked.connect(lambda _, ch_i=idx: self._set_channel_value(ch_i, self.channel_uis[ch_i]["max"]))
+            btn_min.clicked.connect(lambda _, ch_i=idx: self._on_min_max_clicked(ch_i, self.channel_uis[ch_i]["min"]))
+            btn_max.clicked.connect(lambda _, ch_i=idx: self._on_min_max_clicked(ch_i, self.channel_uis[ch_i]["max"]))
             btn_dec.clicked.connect(lambda _, ch_i=idx: self._step_channel(ch_i, -self.channel_uis[ch_i]["sp_step"].value()))
             btn_inc.clicked.connect(lambda _, ch_i=idx: self._step_channel(ch_i, +self.channel_uis[ch_i]["sp_step"].value()))
             sp_step.valueChanged.connect(lambda s, ch_i=idx: self._on_step_spin_changed(ch_i, s))
+            sp_val.valueChanged.connect(lambda v, ch_i=idx: self._on_val_spin_changed(ch_i, v))
+            sp_val.lineEdit().returnPressed.connect(lambda ch_i=idx: self._on_val_spin_enter(ch_i))
 
             self._update_channel_display(idx, def_val)
 
@@ -1773,11 +1804,30 @@ class IncrementalControllerWidget(DashboardWidget):
         ui["btn_dec"].setText(f"-{new_step}")
         ui["btn_inc"].setText(f"+{new_step}")
 
+    def _on_min_max_clicked(self, ch_idx: int, val: int):
+        self._set_channel_value(ch_idx, val)
+        self._send_frame_now()
+
+    def _on_val_spin_changed(self, ch_idx: int, val: int):
+        if self._is_updating:
+            return
+        self._set_channel_value(ch_idx, val)
+        self._send_frame_now()
+
+    def _on_val_spin_enter(self, ch_idx: int):
+        ui = self.channel_uis[ch_idx]
+        sp = ui["sp_val"]
+        sp.interpretText()
+        val = sp.value()
+        self._set_channel_value(ch_idx, val)
+        self._send_frame_now()
+
     def _step_channel(self, ch_idx: int, delta: int):
         ui = self.channel_uis[ch_idx]
         cur = ui["slider"].value()
         new_val = max(ui["min"], min(ui["max"], cur + delta))
         self._set_channel_value(ch_idx, new_val)
+        self._send_frame_now()
 
     def _set_channel_value(self, ch_idx: int, val: int):
         ui = self.channel_uis[ch_idx]
@@ -1809,12 +1859,17 @@ class IncrementalControllerWidget(DashboardWidget):
                 self.current_payload[byte_idx] = val
                 
             self._update_channel_display(ch_idx, val)
+            self._send_frame_now()
         finally:
             self._is_updating = False
 
     def _update_channel_display(self, ch_idx: int, val: int):
         ui = self.channel_uis[ch_idx]
         ui["pbar"].setValue(val)
+        if "sp_val" in ui:
+            ui["sp_val"].blockSignals(True)
+            ui["sp_val"].setValue(val)
+            ui["sp_val"].blockSignals(False)
         span = max(1, ui["max"] - ui["min"])
         pct = ((val - ui["min"]) / span) * 100.0
         ui["val_lbl"].setText(f"{val} / {ui['max']} ({pct:.1f}%) [0x{val:02X}]")
