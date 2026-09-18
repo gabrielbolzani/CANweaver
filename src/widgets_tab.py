@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QFrame, QMenu, QProgressBar, QSlider, QSpinBox, QLineEdit, QPlainTextEdit,
     QRubberBand, QComboBox, QSizePolicy
 )
-from PyQt6.QtGui import QAction, QColor, QPainter, QPen, QBrush, QFont, QTextCursor
+from PyQt6.QtGui import QAction, QColor, QPainter, QPen, QBrush, QFont, QTextCursor, QCursor
 from PyQt6 import sip
 import math
 
@@ -25,8 +25,30 @@ def is_widget_alive(w) -> bool:
         return False
     try:
         return not sip.isdeleted(w)
-    except (RuntimeError, ReferenceError):
+    except Exception:
         return False
+
+
+def get_event_global_pos(event=None) -> QPoint:
+    """Retorna a posição global do cursor de forma segura e compatível com PyQt5, PyQt6 e qualquer tipo de evento."""
+    if event is not None:
+        if hasattr(event, "globalPosition"):
+            try:
+                return event.globalPosition().toPoint()
+            except Exception:
+                pass
+        if hasattr(event, "globalPos"):
+            try:
+                gp = event.globalPos
+                res = gp() if callable(gp) else gp
+                if isinstance(res, QPoint):
+                    return res
+            except Exception:
+                pass
+    try:
+        return QCursor.pos()
+    except Exception:
+        return QPoint(0, 0)
 
 
 class CanvasWidget(QFrame):
@@ -290,7 +312,7 @@ class DashboardWidget(QWidget):
                         canvas.select_widget(self, add=False)
             
             # Salva posições iniciais de todos os widgets selecionados para arrasto em conjunto
-            self._drag_start_mouse = event.globalPosition().toPoint()
+            self._drag_start_mouse = get_event_global_pos(event)
             target_set = getattr(canvas, "selected_widgets", {self})
             if not target_set:
                 target_set = {self}
@@ -303,7 +325,7 @@ class DashboardWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         if self.edit_mode and self._drag_start_mouse is not None:
-            delta = event.globalPosition().toPoint() - self._drag_start_mouse
+            delta = get_event_global_pos(event) - self._drag_start_mouse
             canvas = self.parent()
             snap = getattr(canvas, "snap_to_grid", False) if canvas else False
             grid_size = getattr(canvas, "grid_size", 20) if canvas else 20
@@ -443,70 +465,77 @@ class DashboardWidget(QWidget):
             if is_widget_alive(w) and hasattr(w, "duplicate_callback") and w.duplicate_callback:
                 w.duplicate_callback(w)
 
+    def show_context_menu(self, global_pos: QPoint | None = None):
+        if not self.edit_mode:
+            return
+        if global_pos is None:
+            global_pos = get_event_global_pos()
+        canvas = self.parent()
+        if hasattr(canvas, "_clean_selected_widgets"):
+            canvas._clean_selected_widgets()
+        selected = [w for w in list(getattr(canvas, "selected_widgets", [])) if is_widget_alive(w)]
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #202024; color: white; border: 1px solid #323238; }"
+            "QMenu::item { padding: 6px 24px; }"
+            "QMenu::item:selected { background-color: #3b82f6; }"
+        )
+
+        if len(selected) > 1 and self in selected:
+            # Ações em lote para múltiplos widgets selecionados
+            grid_size = getattr(canvas, "grid_size", 20)
+            action_snap_all = QAction(f"Alinhar Selecionados à Grade ({len(selected)} itens)", self)
+            action_snap_all.triggered.connect(lambda: [w.snap_to_grid(grid_size) for w in selected if is_widget_alive(w)])
+
+            action_center_all = QAction(f"Centralizar Selecionados ({len(selected)} itens)", self)
+            action_center_all.triggered.connect(lambda: [w.center_horizontally() for w in selected if is_widget_alive(w)])
+
+            action_dup_all = QAction(f"Duplicar Selecionados ({len(selected)} itens)", self)
+            action_dup_all.triggered.connect(lambda: self._duplicate_group(selected))
+
+            action_del_all = QAction(f"Excluir Selecionados ({len(selected)} itens)", self)
+            action_del_all.triggered.connect(lambda: self._delete_group(selected))
+
+            menu.addAction(action_snap_all)
+            menu.addAction(action_center_all)
+            menu.addSeparator()
+            menu.addAction(action_dup_all)
+            menu.addAction(action_del_all)
+        else:
+            # Ações individuais
+            action_edit = QAction("Editar Widget", self)
+            action_edit.triggered.connect(lambda: self.edit_callback(self) if callable(getattr(self, "edit_callback", None)) else None)
+
+            action_center = QAction("Centralizar na Horizontal", self)
+            action_center.triggered.connect(self.center_horizontally)
+
+            action_full_width = QAction("Ajustar à Largura da Tela (100%)", self)
+            action_full_width.triggered.connect(lambda: self.fit_to_width(20))
+
+            grid_size = getattr(canvas, "grid_size", 20)
+            action_snap = QAction("Alinhar à Grade", self)
+            action_snap.triggered.connect(lambda: self.snap_to_grid(grid_size))
+
+            action_dup = QAction("Duplicar Widget", self)
+            action_dup.triggered.connect(lambda: self.duplicate_callback(self) if callable(getattr(self, "duplicate_callback", None)) else None)
+
+            action_del = QAction("Excluir Widget", self)
+            action_del.triggered.connect(self._delete_self)
+
+            menu.addAction(action_edit)
+            menu.addSeparator()
+            menu.addAction(action_center)
+            menu.addAction(action_full_width)
+            menu.addAction(action_snap)
+            menu.addSeparator()
+            menu.addAction(action_dup)
+            menu.addAction(action_del)
+
+        menu.exec(global_pos)
+
     def contextMenuEvent(self, event):
         if self.edit_mode:
-            canvas = self.parent()
-            if hasattr(canvas, "_clean_selected_widgets"):
-                canvas._clean_selected_widgets()
-            selected = [w for w in list(getattr(canvas, "selected_widgets", [])) if is_widget_alive(w)]
-            menu = QMenu(self)
-            menu.setStyleSheet(
-                "QMenu { background-color: #202024; color: white; border: 1px solid #323238; }"
-                "QMenu::item { padding: 6px 24px; }"
-                "QMenu::item:selected { background-color: #3b82f6; }"
-            )
-
-            if len(selected) > 1 and self in selected:
-                # Ações em lote para múltiplos widgets selecionados
-                grid_size = getattr(canvas, "grid_size", 20)
-                action_snap_all = QAction(f"Alinhar Selecionados à Grade ({len(selected)} itens)", self)
-                action_snap_all.triggered.connect(lambda: [w.snap_to_grid(grid_size) for w in selected if is_widget_alive(w)])
-
-                action_center_all = QAction(f"Centralizar Selecionados ({len(selected)} itens)", self)
-                action_center_all.triggered.connect(lambda: [w.center_horizontally() for w in selected if is_widget_alive(w)])
-
-                action_dup_all = QAction(f"Duplicar Selecionados ({len(selected)} itens)", self)
-                action_dup_all.triggered.connect(lambda: self._duplicate_group(selected))
-
-                action_del_all = QAction(f"Excluir Selecionados ({len(selected)} itens)", self)
-                action_del_all.triggered.connect(lambda: self._delete_group(selected))
-
-                menu.addAction(action_snap_all)
-                menu.addAction(action_center_all)
-                menu.addSeparator()
-                menu.addAction(action_dup_all)
-                menu.addAction(action_del_all)
-            else:
-                # Ações individuais
-                action_edit = QAction("Editar Widget", self)
-                action_edit.triggered.connect(lambda: self.edit_callback(self) if self.edit_callback else None)
-
-                action_center = QAction("Centralizar na Horizontal", self)
-                action_center.triggered.connect(self.center_horizontally)
-
-                action_full_width = QAction("Ajustar à Largura da Tela (100%)", self)
-                action_full_width.triggered.connect(lambda: self.fit_to_width(20))
-
-                grid_size = getattr(canvas, "grid_size", 20)
-                action_snap = QAction("Alinhar à Grade", self)
-                action_snap.triggered.connect(lambda: self.snap_to_grid(grid_size))
-
-                action_dup = QAction("Duplicar Widget", self)
-                action_dup.triggered.connect(lambda: self.duplicate_callback(self) if self.duplicate_callback else None)
-
-                action_del = QAction("Excluir Widget", self)
-                action_del.triggered.connect(self._delete_self)
-
-                menu.addAction(action_edit)
-                menu.addSeparator()
-                menu.addAction(action_center)
-                menu.addAction(action_full_width)
-                menu.addAction(action_snap)
-                menu.addSeparator()
-                menu.addAction(action_dup)
-                menu.addAction(action_del)
-
-            menu.exec(event.globalPos())
+            self.show_context_menu(get_event_global_pos(event))
         else:
             super().contextMenuEvent(event)
 
@@ -740,17 +769,8 @@ class SelectionOverlay(QWidget):
             self._rubber_current = pos
             self._initial_selection = set(self.canvas.selected_widgets)
             self.update()
-
-        elif event.button() == Qt.MouseButton.RightButton:
-            clicked_widget = self.get_widget_at(pos)
-            if clicked_widget:
-                if clicked_widget not in self.canvas.selected_widgets:
-                    self.canvas.clear_selection()
-                    self.canvas.select_widget(clicked_widget, add=False)
-                    self.update()
-                clicked_widget.contextMenuEvent(event)
-            else:
-                self.canvas.customContextMenuRequested.emit(pos)
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         pos = event.pos()
@@ -859,15 +879,16 @@ class SelectionOverlay(QWidget):
                 self.update()
                 return
 
-            if self._rubber_origin and self._rubber_current:
-                rect = QRect(self._rubber_origin, self._rubber_current).normalized()
-                if rect.width() > 4 and rect.height() > 4:
-                    is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-                    if not is_ctrl:
-                        self.canvas.clear_selection()
-                    for w in self.canvas.findChildren(DashboardWidget):
-                        if is_widget_alive(w) and w.geometry().intersects(rect):
-                            self.canvas.select_widget(w, add=True)
+            if self._rubber_origin:
+                if self._rubber_current:
+                    rect = QRect(self._rubber_origin, self._rubber_current).normalized()
+                    if rect.width() > 4 and rect.height() > 4:
+                        is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                        if not is_ctrl:
+                            self.canvas.clear_selection()
+                        for w in self.canvas.findChildren(DashboardWidget):
+                            if is_widget_alive(w) and w.geometry().intersects(rect):
+                                self.canvas.select_widget(w, add=True)
                 self._rubber_origin = None
                 self._rubber_current = None
                 self._initial_selection.clear()
@@ -887,12 +908,16 @@ class SelectionOverlay(QWidget):
     def contextMenuEvent(self, event):
         pos = event.pos()
         clicked_widget = self.get_widget_at(pos)
+        global_pos = get_event_global_pos(event)
         if clicked_widget:
             if clicked_widget not in self.canvas.selected_widgets:
                 self.canvas.clear_selection()
                 self.canvas.select_widget(clicked_widget, add=False)
                 self.update()
-            clicked_widget.contextMenuEvent(event)
+            if hasattr(clicked_widget, "show_context_menu"):
+                clicked_widget.show_context_menu(global_pos)
+            else:
+                clicked_widget.contextMenuEvent(event)
         else:
             self.canvas.customContextMenuRequested.emit(pos)
 
