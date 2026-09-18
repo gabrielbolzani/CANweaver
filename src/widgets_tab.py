@@ -10,12 +10,24 @@ from PyQt6.QtWidgets import (
     QRubberBand, QComboBox, QSizePolicy
 )
 from PyQt6.QtGui import QAction, QColor, QPainter, QPen, QBrush, QFont, QTextCursor
+from PyQt6 import sip
 import math
 
 from src.widget_dialogs import (
     LabelDialog, IndicatorDialog, ControllerDialog, GaugeDialog, MultiIndicatorDialog,
     IncrementalControllerDialog, TerminalDialog, ShapeDialog
 )
+
+
+def is_widget_alive(w) -> bool:
+    """Verifica com segurança se o QWidget ainda é válido no C++/Qt."""
+    if w is None:
+        return False
+    try:
+        return not sip.isdeleted(w)
+    except (RuntimeError, ReferenceError):
+        return False
+
 
 class CanvasWidget(QFrame):
     """Canvas com opção de grade, snap magnético, multi-seleção e caixa de seleção (rubberband)."""
@@ -41,34 +53,60 @@ class CanvasWidget(QFrame):
         for y in range(0, self.height(), grid_size):
             painter.drawLine(0, y, self.width(), y)
 
+    def _clean_selected_widgets(self):
+        """Remove referências a widgets destruídos pelo Qt do conjunto de seleção."""
+        dead = [w for w in list(self.selected_widgets) if not is_widget_alive(w)]
+        for w in dead:
+            self.selected_widgets.discard(w)
+
     def select_widget(self, w: DashboardWidget, add: bool = False):
+        if not is_widget_alive(w):
+            return
         if not add:
             self.clear_selection()
+        self._clean_selected_widgets()
         self.selected_widgets.add(w)
-        w.set_selected(True)
+        try:
+            w.set_selected(True)
+        except (RuntimeError, ReferenceError):
+            self.selected_widgets.discard(w)
 
     def deselect_widget(self, w: DashboardWidget):
-        if w in self.selected_widgets:
-            self.selected_widgets.remove(w)
-            w.set_selected(False)
+        self.selected_widgets.discard(w)
+        if is_widget_alive(w):
+            try:
+                w.set_selected(False)
+            except (RuntimeError, ReferenceError):
+                pass
 
     def clear_selection(self):
-        for w in list(self.selected_widgets):
-            w.set_selected(False)
+        self._clean_selected_widgets()
+        current = list(self.selected_widgets)
         self.selected_widgets.clear()
+        for w in current:
+            if is_widget_alive(w):
+                try:
+                    w.set_selected(False)
+                except (RuntimeError, ReferenceError):
+                    pass
 
     def select_all(self):
         self.clear_selection()
         for w in self.findChildren(DashboardWidget):
-            self.select_widget(w, add=True)
+            if is_widget_alive(w):
+                self.select_widget(w, add=True)
 
     def delete_selected(self):
-        if not self.selected_widgets:
-            return
-        for w in list(self.selected_widgets):
-            w.setParent(None)
-            w.deleteLater()
+        self._clean_selected_widgets()
+        to_delete = list(self.selected_widgets)
         self.selected_widgets.clear()
+        for w in to_delete:
+            if is_widget_alive(w):
+                try:
+                    w.setParent(None)
+                    w.deleteLater()
+                except (RuntimeError, ReferenceError):
+                    pass
 
     def keyPressEvent(self, event):
         parent_tab = self.parent()
@@ -110,12 +148,21 @@ class CanvasWidget(QFrame):
             rect = QRect(self._rubber_origin, event.pos()).normalized()
             self._rubber_band.setGeometry(rect)
             is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            self._clean_selected_widgets()
             for w in self.findChildren(DashboardWidget):
+                if not is_widget_alive(w):
+                    continue
                 intersects = w.geometry().intersects(rect)
                 if intersects:
-                    w.set_selected(True)
+                    try:
+                        w.set_selected(True)
+                    except (RuntimeError, ReferenceError):
+                        pass
                 elif not is_ctrl and w not in self.selected_widgets:
-                    w.set_selected(False)
+                    try:
+                        w.set_selected(False)
+                    except (RuntimeError, ReferenceError):
+                        pass
         else:
             super().mouseMoveEvent(event)
 
@@ -125,15 +172,27 @@ class CanvasWidget(QFrame):
             self._rubber_band.hide()
             is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
             if not is_ctrl and rect.width() > 4 and rect.height() > 4:
-                self.selected_widgets.clear()
+                self.clear_selection()
+            self._clean_selected_widgets()
             for w in self.findChildren(DashboardWidget):
+                if not is_widget_alive(w):
+                    continue
                 if w.geometry().intersects(rect) and rect.width() > 4 and rect.height() > 4:
                     self.selected_widgets.add(w)
-                    w.set_selected(True)
+                    try:
+                        w.set_selected(True)
+                    except (RuntimeError, ReferenceError):
+                        self.selected_widgets.discard(w)
                 elif w in self.selected_widgets:
-                    w.set_selected(True)
+                    try:
+                        w.set_selected(True)
+                    except (RuntimeError, ReferenceError):
+                        self.selected_widgets.discard(w)
                 else:
-                    w.set_selected(False)
+                    try:
+                        w.set_selected(False)
+                    except (RuntimeError, ReferenceError):
+                        pass
         super().mouseReleaseEvent(event)
 
 
@@ -149,36 +208,63 @@ class DashboardWidget(QWidget):
         self.edit_callback = None       # Definido por WidgetsTab ao posicionar o widget
         self.duplicate_callback = None  # Definido por WidgetsTab ao posicionar o widget
 
+    def deleteLater(self):
+        try:
+            canvas = self.parent()
+            if canvas and hasattr(canvas, "selected_widgets"):
+                canvas.selected_widgets.discard(self)
+        except Exception:
+            pass
+        super().deleteLater()
+
     def set_selected(self, selected: bool):
+        if not is_widget_alive(self):
+            return
         self.selected = selected
         self._update_style()
 
     def set_edit_mode(self, enabled: bool):
-        self.edit_mode = enabled
-        if not enabled:
-            self.selected = False
-        self._update_style()
-        for child in self.findChildren(QWidget):
-            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+        if not is_widget_alive(self):
+            return
+        try:
+            self.edit_mode = enabled
+            if not enabled:
+                self.selected = False
+            self._update_style()
+            for child in self.findChildren(QWidget):
+                if is_widget_alive(child):
+                    try:
+                        child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+                    except (RuntimeError, ReferenceError):
+                        pass
+        except (RuntimeError, ReferenceError):
+            pass
 
     def _update_style(self):
-        if not self.edit_mode:
-            self.setStyleSheet("")
+        if not is_widget_alive(self):
             return
-        if self.selected:
-            self.setStyleSheet(
-                "DashboardWidget { border: 2px solid #3b82f6; background-color: rgba(59, 130, 246, 0.15); border-radius: 4px; }"
-            )
-        else:
-            self.setStyleSheet(
-                "DashboardWidget { border: 1px dashed #71717a; background-color: rgba(255, 255, 255, 0.03); border-radius: 4px; }"
-            )
+        try:
+            if not self.edit_mode:
+                self.setStyleSheet("")
+                return
+            if self.selected:
+                self.setStyleSheet(
+                    "DashboardWidget { border: 2px solid #3b82f6; background-color: rgba(59, 130, 246, 0.15); border-radius: 4px; }"
+                )
+            else:
+                self.setStyleSheet(
+                    "DashboardWidget { border: 1px dashed #71717a; background-color: rgba(255, 255, 255, 0.03); border-radius: 4px; }"
+                )
+        except (RuntimeError, ReferenceError):
+            pass
 
     def mousePressEvent(self, event):
         if self.edit_mode and event.button() == Qt.MouseButton.LeftButton:
             canvas = self.parent()
             is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
             if hasattr(canvas, "selected_widgets"):
+                if hasattr(canvas, "_clean_selected_widgets"):
+                    canvas._clean_selected_widgets()
                 if is_ctrl:
                     if self in canvas.selected_widgets:
                         canvas.deselect_widget(self)
@@ -194,9 +280,10 @@ class DashboardWidget(QWidget):
             target_set = getattr(canvas, "selected_widgets", {self})
             if not target_set:
                 target_set = {self}
-            for w in target_set:
-                w._drag_start_pos = w.pos()
-                w.raise_()
+            for w in list(target_set):
+                if is_widget_alive(w):
+                    w._drag_start_pos = w.pos()
+                    w.raise_()
         else:
             super().mousePressEvent(event)
 
@@ -210,8 +297,8 @@ class DashboardWidget(QWidget):
             if not target_set:
                 target_set = {self}
 
-            for w in target_set:
-                if w._drag_start_pos is None:
+            for w in list(target_set):
+                if not is_widget_alive(w) or w._drag_start_pos is None:
                     continue
                 new_pos = w._drag_start_pos + delta
                 if snap:
@@ -235,16 +322,19 @@ class DashboardWidget(QWidget):
             target_set = getattr(canvas, "selected_widgets", {self})
             if not target_set:
                 target_set = {self}
-            for w in target_set:
-                w._drag_start_pos = None
-                if getattr(canvas, "snap_to_grid", False):
-                    w.snap_to_grid(grid_size)
+            for w in list(target_set):
+                if is_widget_alive(w):
+                    w._drag_start_pos = None
+                    if getattr(canvas, "snap_to_grid", False) and hasattr(w, "snap_to_grid"):
+                        w.snap_to_grid(grid_size)
             self._drag_start_mouse = None
         else:
             super().mouseReleaseEvent(event)
 
     def center_horizontally(self):
         """Centraliza o widget na horizontal do canvas."""
+        if not is_widget_alive(self):
+            return
         parent = self.parent()
         if parent:
             new_x = max(0, (parent.width() - self.width()) // 2)
@@ -255,6 +345,8 @@ class DashboardWidget(QWidget):
 
     def fit_to_width(self, margin=20):
         """Ajusta a largura do widget para ocupar toda a largura da tela/canvas com margens."""
+        if not is_widget_alive(self):
+            return
         parent = self.parent()
         if parent:
             target_w = max(200, parent.width() - (margin * 2))
@@ -265,6 +357,8 @@ class DashboardWidget(QWidget):
 
     def snap_to_grid(self, grid_size=20):
         """Alinha a posição atual do widget para o múltiplo mais próximo da grade."""
+        if not is_widget_alive(self):
+            return
         new_x = round(self.x() / grid_size) * grid_size
         new_y = round(self.y() / grid_size) * grid_size
         parent = self.parent()
@@ -275,7 +369,20 @@ class DashboardWidget(QWidget):
 
         # Se snap_size estiver ativo na config, trava também largura e altura em múltiplos do snap
         if isinstance(self.config, dict) and self.config.get("snap_size"):
-            if self.config.get("width") and self.config.get("height"):
+            if self.config.get("gauge_size"):
+                size = max(grid_size, round(int(self.config["gauge_size"]) / grid_size) * grid_size)
+                self.config["gauge_size"] = size
+                style = self.config.get("style", "Arco")
+                if style == "Barra Horizontal":
+                    self.setFixedSize(size, max(60, size // 3) + 30)
+                else:
+                    self.setFixedSize(size, size + 30)
+            elif self.config.get("led_size"):
+                size = max(12, round(int(self.config["led_size"]) / grid_size) * grid_size)
+                self.config["led_size"] = size
+                if hasattr(self, "btn_val"):
+                    self.btn_val.setFixedSize(size, size)
+            elif self.config.get("width") and self.config.get("height"):
                 target_w = max(grid_size, round(self.width() / grid_size) * grid_size)
                 target_h = max(grid_size, round(self.height() / grid_size) * grid_size)
                 self.setFixedSize(target_w, target_h)
@@ -283,10 +390,39 @@ class DashboardWidget(QWidget):
                 target_w = max(grid_size, round(self.width() / grid_size) * grid_size)
                 self.setFixedWidth(target_w)
 
+    def _delete_self(self):
+        canvas = self.parent()
+        if canvas and hasattr(canvas, "selected_widgets"):
+            canvas.selected_widgets.discard(self)
+        try:
+            self.setParent(None)
+            self.deleteLater()
+        except (RuntimeError, ReferenceError):
+            pass
+
+    def _delete_group(self, group):
+        canvas = self.parent()
+        for w in list(group):
+            if canvas and hasattr(canvas, "selected_widgets"):
+                canvas.selected_widgets.discard(w)
+            if is_widget_alive(w):
+                try:
+                    w.setParent(None)
+                    w.deleteLater()
+                except (RuntimeError, ReferenceError):
+                    pass
+
+    def _duplicate_group(self, group):
+        for w in list(group):
+            if is_widget_alive(w) and hasattr(w, "duplicate_callback") and w.duplicate_callback:
+                w.duplicate_callback(w)
+
     def contextMenuEvent(self, event):
         if self.edit_mode:
             canvas = self.parent()
-            selected = list(getattr(canvas, "selected_widgets", []))
+            if hasattr(canvas, "_clean_selected_widgets"):
+                canvas._clean_selected_widgets()
+            selected = [w for w in list(getattr(canvas, "selected_widgets", [])) if is_widget_alive(w)]
             menu = QMenu(self)
             menu.setStyleSheet(
                 "QMenu { background-color: #202024; color: white; border: 1px solid #323238; }"
@@ -298,16 +434,16 @@ class DashboardWidget(QWidget):
                 # Ações em lote para múltiplos widgets selecionados
                 grid_size = getattr(canvas, "grid_size", 20)
                 action_snap_all = QAction(f"Alinhar Selecionados à Grade ({len(selected)} itens)", self)
-                action_snap_all.triggered.connect(lambda: [w.snap_to_grid(grid_size) for w in selected])
+                action_snap_all.triggered.connect(lambda: [w.snap_to_grid(grid_size) for w in selected if is_widget_alive(w)])
 
                 action_center_all = QAction(f"Centralizar Selecionados ({len(selected)} itens)", self)
-                action_center_all.triggered.connect(lambda: [w.center_horizontally() for w in selected])
+                action_center_all.triggered.connect(lambda: [w.center_horizontally() for w in selected if is_widget_alive(w)])
 
                 action_dup_all = QAction(f"Duplicar Selecionados ({len(selected)} itens)", self)
                 action_dup_all.triggered.connect(lambda: self._duplicate_group(selected))
 
                 action_del_all = QAction(f"Excluir Selecionados ({len(selected)} itens)", self)
-                action_del_all.triggered.connect(lambda: [w.deleteLater() for w in selected])
+                action_del_all.triggered.connect(lambda: self._delete_group(selected))
 
                 menu.addAction(action_snap_all)
                 menu.addAction(action_center_all)
@@ -333,7 +469,7 @@ class DashboardWidget(QWidget):
                 action_dup.triggered.connect(lambda: self.duplicate_callback(self) if self.duplicate_callback else None)
 
                 action_del = QAction("Excluir Widget", self)
-                action_del.triggered.connect(self.deleteLater)
+                action_del.triggered.connect(self._delete_self)
 
                 menu.addAction(action_edit)
                 menu.addSeparator()
@@ -347,11 +483,6 @@ class DashboardWidget(QWidget):
             menu.exec(event.globalPos())
         else:
             super().contextMenuEvent(event)
-
-    def _duplicate_group(self, group):
-        for w in group:
-            if hasattr(w, "duplicate_callback") and w.duplicate_callback:
-                w.duplicate_callback(w)
 
 
 def normalize_can_id(val) -> int:
@@ -1679,7 +1810,7 @@ class WidgetsTab(QWidget):
 
     def _broadcast_can_frame(self, can_id: int, freq: float, payload: list):
         for w in self.canvas.findChildren(DashboardWidget):
-            if hasattr(w, "process_can_frame"):
+            if is_widget_alive(w) and hasattr(w, "process_can_frame"):
                 try:
                     w.process_can_frame(can_id, freq, payload)
                 except Exception:
@@ -1707,7 +1838,8 @@ class WidgetsTab(QWidget):
             self.canvas.clear_selection()
             
         for child in self.canvas.findChildren(DashboardWidget):
-            child.set_edit_mode(checked)
+            if is_widget_alive(child):
+                child.set_edit_mode(checked)
 
     def toggle_grid(self, checked):
         self.canvas.show_grid = checked
@@ -1731,13 +1863,13 @@ class WidgetsTab(QWidget):
     def center_all_widgets(self):
         """Centraliza todos os widgets horizontalmente no canvas."""
         for w in self.canvas.findChildren(DashboardWidget):
-            if hasattr(w, "center_horizontally"):
+            if is_widget_alive(w) and hasattr(w, "center_horizontally"):
                 w.center_horizontally()
 
     def snap_all_widgets(self):
         """Alinha todos os widgets para a grade."""
         for w in self.canvas.findChildren(DashboardWidget):
-            if hasattr(w, "snap_to_grid"):
+            if is_widget_alive(w) and hasattr(w, "snap_to_grid"):
                 w.snap_to_grid(getattr(self.canvas, "grid_size", 20))
 
     def add_label(self, pos):
@@ -1813,9 +1945,15 @@ class WidgetsTab(QWidget):
     def clear_all(self):
         """Remove todos os widgets do canvas — usado pelo 'Novo Projeto'."""
         self.canvas.clear_selection()
-        for w in self.canvas.findChildren(DashboardWidget):
-            w.setParent(None)
-            w.deleteLater()
+        for w in list(self.canvas.findChildren(DashboardWidget)):
+            if hasattr(self.canvas, "selected_widgets"):
+                self.canvas.selected_widgets.discard(w)
+            if is_widget_alive(w):
+                try:
+                    w.setParent(None)
+                    w.deleteLater()
+                except (RuntimeError, ReferenceError):
+                    pass
         if self.edit_mode:
             self.btn_edit.setChecked(False)
 
@@ -1855,7 +1993,14 @@ class WidgetsTab(QWidget):
                 new_cfg["width"] = saved_width
             if saved_height and "height" not in new_cfg:
                 new_cfg["height"] = saved_height
-            widget.deleteLater()
+            if hasattr(self.canvas, "selected_widgets"):
+                self.canvas.selected_widgets.discard(widget)
+            if is_widget_alive(widget):
+                try:
+                    widget.setParent(None)
+                    widget.deleteLater()
+                except (RuntimeError, ReferenceError):
+                    pass
             if wtype == "label":
                 new_w = LabelWidget(self.canvas, new_cfg)
             elif wtype == "indicator":
@@ -1914,20 +2059,27 @@ class WidgetsTab(QWidget):
     def export_data(self):
         widgets_data = []
         for w in self.canvas.findChildren(DashboardWidget):
-            cfg = w.config.copy()
-            cfg["pos_x"] = w.pos().x()
-            cfg["pos_y"] = w.pos().y()
-            cfg["width"] = w.width()
-            cfg["height"] = w.height()
-            widgets_data.append(cfg)
+            if is_widget_alive(w) and hasattr(w, "config") and isinstance(w.config, dict):
+                cfg = w.config.copy()
+                cfg["pos_x"] = w.pos().x()
+                cfg["pos_y"] = w.pos().y()
+                cfg["width"] = w.width()
+                cfg["height"] = w.height()
+                widgets_data.append(cfg)
         return widgets_data
 
     def import_data(self, widgets_data: list):
         """Restaura widgets no canvas a partir de uma lista de dicts exportados."""
         self.canvas.clear_selection()
-        for w in self.canvas.findChildren(DashboardWidget):
-            w.setParent(None)
-            w.deleteLater()
+        for w in list(self.canvas.findChildren(DashboardWidget)):
+            if hasattr(self.canvas, "selected_widgets"):
+                self.canvas.selected_widgets.discard(w)
+            if is_widget_alive(w):
+                try:
+                    w.setParent(None)
+                    w.deleteLater()
+                except (RuntimeError, ReferenceError):
+                    pass
         for cfg in widgets_data:
             pos = QPoint(int(cfg.get("pos_x", 20)), int(cfg.get("pos_y", 20)))
             wtype = cfg.get("type", "")

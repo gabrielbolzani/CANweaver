@@ -82,7 +82,7 @@ def _get_grid_size(parent, explicit_grid_size=None) -> int:
 # ---------------------------------------------------------------------------
 
 class LabelDialog(QDialog):
-    def __init__(self, parent=None, config=None, grid_size=None):
+    def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
         self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle("Configurar Label")
@@ -195,8 +195,9 @@ class LabelDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class IndicatorDialog(QDialog):
-    def __init__(self, parent=None, config=None):
+    def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
+        self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle("Configurar Indicador")
         self.resize(380, 340)
 
@@ -248,7 +249,6 @@ class IndicatorDialog(QDialog):
         self.sp_led_size.setValue(config.get("led_size", 32) if config else 32)
         self.sp_led_size.setSuffix(" px")
 
-        self.grid_size = _get_grid_size(parent)
         self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
         self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
         self.chk_snap_size.toggled.connect(self._on_snap_toggled)
@@ -349,7 +349,7 @@ class IndicatorDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class ControllerDialog(QDialog):
-    def __init__(self, parent=None, config=None, grid_size=None):
+    def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
         self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle("Configurar Controlador / Botão")
@@ -487,8 +487,9 @@ class ControllerDialog(QDialog):
 class GaugeDialog(QDialog):
     """Diálogo de configuração para o Gauge (indicador analógico)."""
 
-    def __init__(self, parent=None, config=None):
+    def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
+        self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle("Configurar Gauge")
         self.resize(450, 480)
 
@@ -541,7 +542,6 @@ class GaugeDialog(QDialog):
         self.lbl_factor = QLabel("Fator: --")
         self.lbl_factor.setStyleSheet("color: #a1a1aa; font-style: italic;")
 
-        self.grid_size = _get_grid_size(parent)
         self.sp_size = QSpinBox()
         self.sp_size.setRange(40, 600)
         self.sp_size.setValue(config.get("gauge_size", 160) if config else 160)
@@ -764,8 +764,9 @@ class MultiIndicatorDialog(QDialog):
     O primeiro estado cujo padrao casar com o payload recebido e exibido.
     """
 
-    def __init__(self, parent=None, config=None):
+    def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
+        self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle('Configurar Indicador Multi-Estado (Beta)')
         self.resize(640, 540)
         self._state_rows = []
@@ -788,7 +789,6 @@ class MultiIndicatorDialog(QDialog):
         self.sp_led_size.setValue(config.get('led_size', 32) if config else 32)
         self.sp_led_size.setSuffix(' px')
 
-        self.grid_size = _get_grid_size(parent)
         self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
         self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
         self.chk_snap_size.toggled.connect(self._on_snap_toggled)
@@ -1035,8 +1035,9 @@ class _ChannelRow:
 class IncrementalControllerDialog(QDialog):
     """Diálogo de configuração para o Controlador Incremental (Multi-Canais / Variáveis)."""
 
-    def __init__(self, parent=None, config=None):
+    def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
+        self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle("Configurar Controlador Incremental")
         self.resize(680, 520)
 
@@ -1226,8 +1227,9 @@ class IncrementalControllerDialog(QDialog):
 class TerminalDialog(QDialog):
     """Diálogo de configuração para o Terminal CAN (somente leitura com filtros)."""
 
-    def __init__(self, parent=None, config=None):
+    def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
+        self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle("Configurar Terminal CAN")
         self.resize(440, 280)
 
@@ -1242,7 +1244,6 @@ class TerminalDialog(QDialog):
         self.sp_max_lines.setRange(50, 5000)
         self.sp_max_lines.setValue(config.get("max_lines", 200) if config else 200)
 
-        self.grid_size = _get_grid_size(parent)
         self.sp_width = QSpinBox()
         self.sp_width.setRange(160, 3000)
         self.sp_width.setValue(int(config.get("width", 400)) if config and config.get("width") else 400)
@@ -1330,7 +1331,7 @@ class TerminalDialog(QDialog):
 class ShapeDialog(QDialog):
     """Diálogo para criação e edição de formas geométricas livres (Linha, Retângulo, Círculo)."""
 
-    def __init__(self, parent=None, config=None, default_shape="rectangle", grid_size=None):
+    def __init__(self, parent=None, config=None, default_shape="rectangle", grid_size=None, *args, **kwargs):
         super().__init__(parent)
         self.setWindowTitle("Configurar Forma Livre")
         self.resize(440, 460)
