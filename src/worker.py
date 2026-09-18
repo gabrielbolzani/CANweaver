@@ -43,7 +43,12 @@ class CANWorker(QThread):
         self.playback_file = ""
         self.playback_transmit = False
         self.playback_loop = False
+        self.playback_paused = False
+        self.playback_speed = 1.0
         self.seek_requested = None
+        self.playback_rows = []
+        self.playback_total = 0
+        self.playback_index = 0
         self.last_timestamps = {}
         self.counters = {0x0C0: 0, 0x180: 0, 0x3F0: 0}
         self.toggle_111 = False
@@ -125,13 +130,34 @@ class CANWorker(QThread):
 
             self.playback_total = len(self.playback_rows)
             self.playback_index = 0
+            self.playback_paused = False
 
             while self.running:
                 last_msg_time = None
 
                 while self.playback_index < self.playback_total and self.running:
+                    # Se estiver pausado, aguarda comandos mantendo a UI responsiva ao seek
+                    while self.playback_paused and self.running:
+                        if self.seek_requested is not None:
+                            self.playback_index = max(0, min(self.seek_requested, self.playback_total - 1))
+                            self.seek_requested = None
+                            last_msg_time = None
+                            if 0 <= self.playback_index < self.playback_total:
+                                row = self.playback_rows[self.playback_index]
+                                try:
+                                    can_id = int(row[1], 16)
+                                    payload = [int(x, 16) for x in row[3:]]
+                                    self.frame_received.emit(can_id, 0.0, payload)
+                                    self.playback_progress.emit(self.playback_index, self.playback_total)
+                                except Exception:
+                                    pass
+                        time.sleep(0.04)
+
+                    if not self.running:
+                        break
+
                     if self.seek_requested is not None:
-                        self.playback_index = self.seek_requested
+                        self.playback_index = max(0, min(self.seek_requested, self.playback_total - 1))
                         self.seek_requested = None
                         last_msg_time = None
                         
@@ -147,7 +173,16 @@ class CANWorker(QThread):
                     if last_msg_time is not None:
                         delay = timestamp - last_msg_time
                         if delay > 0:
-                            time.sleep(delay)
+                            effective_delay = delay / max(0.1, self.playback_speed)
+                            # Fatias pequenas de sleep para responder instantaneamente a pause/seek/stop
+                            while effective_delay > 0.04 and self.running and not self.playback_paused and self.seek_requested is None:
+                                time.sleep(0.04)
+                                effective_delay -= 0.04
+                            if effective_delay > 0 and self.running and not self.playback_paused and self.seek_requested is None:
+                                time.sleep(effective_delay)
+
+                    if self.seek_requested is not None or self.playback_paused:
+                        continue
 
                     last_msg_time = timestamp
 
@@ -203,10 +238,32 @@ class CANWorker(QThread):
     def stop(self):
         self.running = False
 
-    def seek_playback(self, index_pct: int):
-        """Muda a posição para um percentual ou posição."""
-        if self.mode == "PLAYBACK":
-            self.seek_requested = int((index_pct / 100.0) * self.playback_total)
+    def pause_playback(self):
+        self.playback_paused = True
+
+    def resume_playback(self):
+        self.playback_paused = False
+
+    def toggle_pause_playback(self) -> bool:
+        self.playback_paused = not self.playback_paused
+        return self.playback_paused
+
+    def stop_playback(self):
+        self.playback_paused = True
+        if hasattr(self, "playback_total") and self.playback_total > 0:
+            self.seek_requested = 0
+
+    def seek_playback(self, val_permille: int | float):
+        """Muda a posição para um percentual de 0 a 1000 (para maior resolução)."""
+        if self.mode == "PLAYBACK" and hasattr(self, "playback_total") and self.playback_total > 0:
+            target = int((float(val_permille) / 1000.0) * self.playback_total)
+            self.seek_requested = max(0, min(target, self.playback_total - 1))
+
+    def set_playback_speed(self, speed: float):
+        self.playback_speed = max(0.1, float(speed))
+
+    def set_playback_loop(self, loop: bool):
+        self.playback_loop = bool(loop)
 
     def send_message(self, can_id, data):
         """Injeta um frame no barramento. Em modo simulado, re-emite o sinal."""

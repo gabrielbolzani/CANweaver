@@ -65,15 +65,28 @@ def _open_color_picker(btn: QPushButton, parent=None):
         _apply_color_style(btn, color.name())
 
 
+def _get_grid_size(parent, explicit_grid_size=None) -> int:
+    if explicit_grid_size is not None and isinstance(explicit_grid_size, int) and explicit_grid_size > 0:
+        return explicit_grid_size
+    g = getattr(parent, "grid_size", None)
+    if g and isinstance(g, int) and g > 0:
+        return g
+    c = getattr(parent, "canvas", None)
+    if c and hasattr(c, "grid_size") and isinstance(c.grid_size, int) and c.grid_size > 0:
+        return c.grid_size
+    return 20
+
+
 # ---------------------------------------------------------------------------
 # LabelDialog
 # ---------------------------------------------------------------------------
 
 class LabelDialog(QDialog):
-    def __init__(self, parent=None, config=None):
+    def __init__(self, parent=None, config=None, grid_size=None):
         super().__init__(parent)
+        self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle("Configurar Label")
-        self.resize(340, 200)
+        self.resize(360, 240)
 
         layout = QVBoxLayout(self)
 
@@ -110,6 +123,22 @@ class LabelDialog(QDialog):
         opts_layout.addStretch()
         layout.addLayout(opts_layout)
 
+        # Largura opcional com snap
+        dim_layout = QHBoxLayout()
+        dim_layout.addWidget(QLabel("Largura Fixa (0 = Auto):"))
+        self.sp_width = QSpinBox()
+        self.sp_width.setRange(0, 3000)
+        self.sp_width.setValue(int(config.get("width", 0)) if config and config.get("width") else 0)
+        self.sp_width.setSpecialValueText("Automático")
+        self.sp_width.setSuffix(" px")
+        dim_layout.addWidget(self.sp_width)
+        layout.addLayout(dim_layout)
+
+        self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
+        self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
+        self.chk_snap_size.toggled.connect(self._on_snap_toggled)
+        layout.addWidget(self.chk_snap_size)
+
         # Cor do texto
         color_layout = QHBoxLayout()
         color_layout.addWidget(QLabel("Cor do texto:"))
@@ -130,12 +159,23 @@ class LabelDialog(QDialog):
         btn_layout.addWidget(btn_cancel)
         layout.addLayout(btn_layout)
 
+        if self.chk_snap_size.isChecked():
+            self._on_snap_toggled(True)
+
+    def _on_snap_toggled(self, checked: bool):
+        if checked and self.sp_width.value() > 0:
+            val = round(self.sp_width.value() / self.grid_size) * self.grid_size
+            self.sp_width.setValue(max(self.grid_size, val))
+            self.sp_width.setSingleStep(self.grid_size)
+        else:
+            self.sp_width.setSingleStep(10)
+
     def _pick_color(self):
         _open_color_picker(self.btn_color, self)
         self.btn_color.setText(self.btn_color._color)
 
     def get_config(self):
-        return {
+        cfg = {
             "type": "label",
             "text": self.txt_text.text().strip(),
             "size": self.sp_size.value(),
@@ -143,7 +183,11 @@ class LabelDialog(QDialog):
             "italic": self.btn_italic.isChecked(),
             "strikethrough": self.btn_strike.isChecked(),
             "color": self.btn_color._color,
+            "snap_size": self.chk_snap_size.isChecked(),
         }
+        if self.sp_width.value() > 0:
+            cfg["width"] = self.sp_width.value()
+        return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +248,11 @@ class IndicatorDialog(QDialog):
         self.sp_led_size.setValue(config.get("led_size", 32) if config else 32)
         self.sp_led_size.setSuffix(" px")
 
+        self.grid_size = _get_grid_size(parent)
+        self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
+        self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
+        self.chk_snap_size.toggled.connect(self._on_snap_toggled)
+
         # --- Controles de texto ---
         # Usa textos padrão quando o tipo é Texto (evita hexadecimais de cor)
         if config and config.get("visual_type") == "Texto":
@@ -222,6 +271,7 @@ class IndicatorDialog(QDialog):
         layout.addRow("Cor DESLIGADO:", self.btn_color_off)
         layout.addRow("Cor LIGADO:", self.btn_color_on)
         layout.addRow("Tamanho LED:", self.sp_led_size)
+        layout.addRow("Snap de Tamanho:", self.chk_snap_size)
         layout.addRow("Texto DESLIGADO:", self.txt_off)
         layout.addRow("Texto LIGADO:", self.txt_on)
 
@@ -240,6 +290,17 @@ class IndicatorDialog(QDialog):
         self.cb_type.currentTextChanged.connect(self._update_color_mode)
         self._update_color_mode(self.cb_type.currentText())
 
+        if self.chk_snap_size.isChecked():
+            self._on_snap_toggled(True)
+
+    def _on_snap_toggled(self, checked: bool):
+        if checked:
+            val = round(self.sp_led_size.value() / self.grid_size) * self.grid_size
+            self.sp_led_size.setValue(max(self.grid_size, val))
+            self.sp_led_size.setSingleStep(self.grid_size)
+        else:
+            self.sp_led_size.setSingleStep(4)
+
     def _pick(self, btn: QPushButton):
         _open_color_picker(btn, self)
         btn.setText(btn._color)
@@ -257,6 +318,7 @@ class IndicatorDialog(QDialog):
         _set_row_visible(self.btn_color_off, is_led)
         _set_row_visible(self.btn_color_on,  is_led)
         _set_row_visible(self.sp_led_size,   is_led)
+        _set_row_visible(self.chk_snap_size, is_led)
         _set_row_visible(self.txt_off, not is_led)
         _set_row_visible(self.txt_on,  not is_led)
 
@@ -276,6 +338,7 @@ class IndicatorDialog(QDialog):
             "bit": self.sp_bit.value(),
             "visual_type": self.cb_type.currentText(),
             "led_size": self.sp_led_size.value(),
+            "snap_size": self.chk_snap_size.isChecked(),
             "val_off": self.btn_color_off._color if is_led else self.txt_off.text().strip(),
             "val_on":  self.btn_color_on._color  if is_led else self.txt_on.text().strip(),
         }
@@ -286,10 +349,11 @@ class IndicatorDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class ControllerDialog(QDialog):
-    def __init__(self, parent=None, config=None):
+    def __init__(self, parent=None, config=None, grid_size=None):
         super().__init__(parent)
-        self.setWindowTitle("Configurar Controlador")
-        self.resize(400, 350)
+        self.grid_size = _get_grid_size(parent, grid_size)
+        self.setWindowTitle("Configurar Controlador / Botão")
+        self.resize(420, 420)
 
         layout = QFormLayout(self)
 
@@ -321,6 +385,21 @@ class ControllerDialog(QDialog):
         self.sp_hz.setRange(1, 1000)
         self.sp_hz.setValue(config.get("hz", 10) if config else 10)
 
+        # Dimensões e Snap do botão
+        self.sp_width = QSpinBox()
+        self.sp_width.setRange(40, 1500)
+        self.sp_width.setValue(int(config.get("width", 140)) if config and config.get("width") else 140)
+        self.sp_width.setSuffix(" px")
+
+        self.sp_height = QSpinBox()
+        self.sp_height.setRange(20, 800)
+        self.sp_height.setValue(int(config.get("height", 45)) if config and config.get("height") else 45)
+        self.sp_height.setSuffix(" px")
+
+        self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
+        self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
+        self.chk_snap_size.toggled.connect(self._on_snap_toggled)
+
         layout.addRow("Nome do Botão:", self.txt_name)
         layout.addRow("ID (HEX):", self.txt_can_id)
         layout.addRow("Formato dos Dados:", self.cb_format)
@@ -328,9 +407,15 @@ class ControllerDialog(QDialog):
         layout.addRow("Payload Desligado (OFF):", self.txt_payload_off)
         layout.addRow("Comportamento:", self.cb_behavior)
         layout.addRow("Frequência (Hz):", self.sp_hz)
+        layout.addRow("Largura do Botão:", self.sp_width)
+        layout.addRow("Altura do Botão:", self.sp_height)
+        layout.addRow("Snap de Tamanho:", self.chk_snap_size)
 
         self.cb_behavior.currentIndexChanged.connect(self.update_visibility)
         self.update_visibility()
+
+        if self.chk_snap_size.isChecked():
+            self._on_snap_toggled(True)
 
         btn_layout = QHBoxLayout()
         btn_ok = QPushButton("Salvar")
@@ -341,6 +426,18 @@ class ControllerDialog(QDialog):
         btn_layout.addWidget(btn_ok)
         btn_layout.addWidget(btn_cancel)
         layout.addRow(btn_layout)
+
+    def _on_snap_toggled(self, checked: bool):
+        if checked:
+            w = round(self.sp_width.value() / self.grid_size) * self.grid_size
+            h = round(self.sp_height.value() / self.grid_size) * self.grid_size
+            self.sp_width.setValue(max(self.grid_size, w))
+            self.sp_height.setValue(max(self.grid_size, h))
+            self.sp_width.setSingleStep(self.grid_size)
+            self.sp_height.setSingleStep(self.grid_size)
+        else:
+            self.sp_width.setSingleStep(10)
+            self.sp_height.setSingleStep(5)
 
     def update_visibility(self):
         txt = self.cb_behavior.currentText()
@@ -376,7 +473,10 @@ class ControllerDialog(QDialog):
             "payload_on": self.txt_payload_on.text().strip(),
             "payload_off": self.txt_payload_off.text().strip(),
             "behavior": self.cb_behavior.currentText(),
-            "hz": self.sp_hz.value()
+            "hz": self.sp_hz.value(),
+            "width": self.sp_width.value(),
+            "height": self.sp_height.value(),
+            "snap_size": self.chk_snap_size.isChecked(),
         }
 
 
@@ -441,11 +541,16 @@ class GaugeDialog(QDialog):
         self.lbl_factor = QLabel("Fator: --")
         self.lbl_factor.setStyleSheet("color: #a1a1aa; font-style: italic;")
 
+        self.grid_size = _get_grid_size(parent)
         self.sp_size = QSpinBox()
         self.sp_size.setRange(40, 600)
         self.sp_size.setValue(config.get("gauge_size", 160) if config else 160)
         self.sp_size.setSuffix(" px")
-        self.sp_size.setSingleStep(20)
+        self.sp_size.setSingleStep(self.grid_size)
+
+        self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
+        self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
+        self.chk_snap_size.toggled.connect(self._on_snap_toggled)
 
         self.chk_invert = QCheckBox("Inverter direção de crescimento")
         self.chk_invert.setChecked(config.get("invert_direction", False) if config else False)
@@ -464,6 +569,7 @@ class GaugeDialog(QDialog):
         layout.addRow("", self.chk_float)
         layout.addRow("", self.lbl_factor)
         layout.addRow("Tamanho do Gauge:", self.sp_size)
+        layout.addRow("Snap de Tamanho:", self.chk_snap_size)
         layout.addRow("", self.chk_invert)
 
         btn_layout = QHBoxLayout()
@@ -481,6 +587,17 @@ class GaugeDialog(QDialog):
         self.sp_min_conv.valueChanged.connect(self._update_factor)
         self.sp_max_conv.valueChanged.connect(self._update_factor)
         self._update_factor()
+
+        if self.chk_snap_size.isChecked():
+            self._on_snap_toggled(True)
+
+    def _on_snap_toggled(self, checked: bool):
+        if checked:
+            val = round(self.sp_size.value() / self.grid_size) * self.grid_size
+            self.sp_size.setValue(max(self.grid_size, val))
+            self.sp_size.setSingleStep(self.grid_size)
+        else:
+            self.sp_size.setSingleStep(10)
 
     def _update_factor(self):
         d_raw = self.sp_max_raw.value() - self.sp_min_raw.value()
@@ -522,6 +639,7 @@ class GaugeDialog(QDialog):
             "val_max_conv": self.sp_max_conv.value(),
             "show_float": self.chk_float.isChecked(),
             "gauge_size": self.sp_size.value(),
+            "snap_size": self.chk_snap_size.isChecked(),
             "invert_direction": self.chk_invert.isChecked(),
         }
 
@@ -670,6 +788,11 @@ class MultiIndicatorDialog(QDialog):
         self.sp_led_size.setValue(config.get('led_size', 32) if config else 32)
         self.sp_led_size.setSuffix(' px')
 
+        self.grid_size = _get_grid_size(parent)
+        self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
+        self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
+        self.chk_snap_size.toggled.connect(self._on_snap_toggled)
+
         self.cb_fmt = QComboBox()
         self.cb_fmt.addItems(['HEX', 'BIN'])
         self.cb_fmt.setCurrentText(self._fmt)
@@ -691,9 +814,21 @@ class MultiIndicatorDialog(QDialog):
         form.addRow('ID CAN (HEX):', self.txt_can_id)
         form.addRow('Tipo Visual:', self.cb_visual)
         form.addRow('Tamanho LED:', self.sp_led_size)
+        form.addRow('Snap de Tamanho:', self.chk_snap_size)
         form.addRow('Formato do padrao:', self.cb_fmt)
         form.addRow('Estado padrao (label + cor):', default_row_layout)
         outer.addLayout(form)
+
+        if self.chk_snap_size.isChecked():
+            self._on_snap_toggled(True)
+
+    def _on_snap_toggled(self, checked: bool):
+        if checked:
+            val = round(self.sp_led_size.value() / self.grid_size) * self.grid_size
+            self.sp_led_size.setValue(max(self.grid_size, val))
+            self.sp_led_size.setSingleStep(self.grid_size)
+        else:
+            self.sp_led_size.setSingleStep(4)
 
         hdr_layout = QHBoxLayout()
         lbl_h = QLabel('Estados  (ordem importa: primeiro que casar e exibido)')
@@ -798,6 +933,7 @@ class MultiIndicatorDialog(QDialog):
             'can_id': can_id_str,
             'visual_type': self.cb_visual.currentText(),
             'led_size': self.sp_led_size.value(),
+            'snap_size': self.chk_snap_size.isChecked(),
             'pattern_format': self._fmt,
             'states': [r.get_state() for r in valid],
             'default_label': self.txt_default_label.text().strip(),
@@ -1106,6 +1242,21 @@ class TerminalDialog(QDialog):
         self.sp_max_lines.setRange(50, 5000)
         self.sp_max_lines.setValue(config.get("max_lines", 200) if config else 200)
 
+        self.grid_size = _get_grid_size(parent)
+        self.sp_width = QSpinBox()
+        self.sp_width.setRange(160, 3000)
+        self.sp_width.setValue(int(config.get("width", 400)) if config and config.get("width") else 400)
+        self.sp_width.setSuffix(" px")
+
+        self.sp_height = QSpinBox()
+        self.sp_height.setRange(100, 2000)
+        self.sp_height.setValue(int(config.get("height", 250)) if config and config.get("height") else 250)
+        self.sp_height.setSuffix(" px")
+
+        self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
+        self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
+        self.chk_snap_size.toggled.connect(self._on_snap_toggled)
+
         self.chk_timestamp = QCheckBox("Exibir Timestamp (Hora:Min:Seg.ms)")
         self.chk_timestamp.setChecked(config.get("show_timestamp", True) if config else True)
 
@@ -1118,6 +1269,9 @@ class TerminalDialog(QDialog):
         form.addRow("Nome do Widget:", self.txt_name)
         form.addRow("Filtro de IDs CAN:", self.txt_filter)
         form.addRow("Limite de Linhas (Buffer):", self.sp_max_lines)
+        form.addRow("Largura:", self.sp_width)
+        form.addRow("Altura:", self.sp_height)
+        form.addRow("Snap de Tamanho:", self.chk_snap_size)
         form.addRow("Opções Visuais:", self.chk_timestamp)
         form.addRow("", self.chk_ascii)
         form.addRow("", self.chk_freq)
@@ -1139,13 +1293,214 @@ class TerminalDialog(QDialog):
         btn_row.addWidget(btn_cancel)
         outer.addLayout(btn_row)
 
+        if self.chk_snap_size.isChecked():
+            self._on_snap_toggled(True)
+
+    def _on_snap_toggled(self, checked: bool):
+        if checked:
+            w = round(self.sp_width.value() / self.grid_size) * self.grid_size
+            h = round(self.sp_height.value() / self.grid_size) * self.grid_size
+            self.sp_width.setValue(max(self.grid_size, w))
+            self.sp_height.setValue(max(self.grid_size, h))
+            self.sp_width.setSingleStep(self.grid_size)
+            self.sp_height.setSingleStep(self.grid_size)
+        else:
+            self.sp_width.setSingleStep(20)
+            self.sp_height.setSingleStep(20)
+
     def get_config(self) -> dict:
         return {
             "type": "terminal",
             "name": self.txt_name.text().strip(),
             "filter_ids": self.txt_filter.text().strip(),
             "max_lines": self.sp_max_lines.value(),
+            "width": self.sp_width.value(),
+            "height": self.sp_height.value(),
+            "snap_size": self.chk_snap_size.isChecked(),
             "show_timestamp": self.chk_timestamp.isChecked(),
             "show_ascii": self.chk_ascii.isChecked(),
             "show_freq": self.chk_freq.isChecked()
+        }
+
+
+# ---------------------------------------------------------------------------
+# ShapeDialog
+# ---------------------------------------------------------------------------
+
+class ShapeDialog(QDialog):
+    """Diálogo para criação e edição de formas geométricas livres (Linha, Retângulo, Círculo)."""
+
+    def __init__(self, parent=None, config=None, default_shape="rectangle", grid_size=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configurar Forma Livre")
+        self.resize(440, 460)
+
+        self.grid_size = _get_grid_size(parent, grid_size)
+
+        outer = QVBoxLayout(self)
+        self.form = QFormLayout()
+
+        # Tipo da Forma
+        self.cb_shape_type = QComboBox()
+        self.cb_shape_type.addItem("Retângulo / Quadrado", "rectangle")
+        self.cb_shape_type.addItem("Círculo / Elipse", "circle")
+        self.cb_shape_type.addItem("Linha", "line")
+
+        init_shape = config.get("shape_type", default_shape) if config else default_shape
+        idx = self.cb_shape_type.findData(init_shape)
+        if idx >= 0:
+            self.cb_shape_type.setCurrentIndex(idx)
+
+        # Orientação da Linha
+        self.cb_orientation = QComboBox()
+        self.cb_orientation.addItem("Horizontal", "horizontal")
+        self.cb_orientation.addItem("Vertical", "vertical")
+        self.cb_orientation.addItem("Diagonal (Descendente)", "diagonal_down")
+        self.cb_orientation.addItem("Diagonal (Ascendente)", "diagonal_up")
+        if config and config.get("orientation"):
+            idx_o = self.cb_orientation.findData(config["orientation"])
+            if idx_o >= 0:
+                self.cb_orientation.setCurrentIndex(idx_o)
+
+        # Dimensões
+        init_w = int(config.get("width", 200 if init_shape == "line" else 160)) if config else (200 if init_shape == "line" else 160)
+        init_h = int(config.get("height", 20 if init_shape == "line" else 160)) if config else (20 if init_shape == "line" else 160)
+
+        self.sp_width = QSpinBox()
+        self.sp_width.setRange(4, 3000)
+        self.sp_width.setValue(init_w)
+        self.sp_width.setSuffix(" px")
+
+        self.sp_height = QSpinBox()
+        self.sp_height.setRange(4, 3000)
+        self.sp_height.setValue(init_h)
+        self.sp_height.setSuffix(" px")
+
+        # Snap
+        self.chk_snap = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
+        self.chk_snap.setChecked(bool(config.get("snap_size", False)) if config else False)
+        self.chk_snap.toggled.connect(self._on_snap_toggled)
+
+        # Cor do traço e espessura
+        init_stroke = config.get("stroke_color", "#3b82f6") if config else "#3b82f6"
+        self.btn_stroke_color = _color_preview_btn(init_stroke, init_stroke)
+        self.btn_stroke_color.clicked.connect(lambda: self._pick_color(self.btn_stroke_color))
+
+        self.sp_stroke_width = QSpinBox()
+        self.sp_stroke_width.setRange(1, 40)
+        self.sp_stroke_width.setValue(int(config.get("stroke_width", 2)) if config else 2)
+        self.sp_stroke_width.setSuffix(" px")
+
+        self.cb_stroke_style = QComboBox()
+        self.cb_stroke_style.addItem("Sólido", "solid")
+        self.cb_stroke_style.addItem("Tracejado", "dash")
+        self.cb_stroke_style.addItem("Pontilhado", "dot")
+        if config and config.get("stroke_style"):
+            idx_s = self.cb_stroke_style.findData(config["stroke_style"])
+            if idx_s >= 0:
+                self.cb_stroke_style.setCurrentIndex(idx_s)
+
+        # Preenchimento
+        self.cb_fill_type = QComboBox()
+        self.cb_fill_type.addItem("Transparente (Vazado)", "transparent")
+        self.cb_fill_type.addItem("Cor Sólida", "solid")
+        init_fill = config.get("fill_color", "transparent") if config else "transparent"
+        if init_fill != "transparent":
+            self.cb_fill_type.setCurrentIndex(1)
+
+        fill_btn_color = init_fill if init_fill != "transparent" else "#1e293b"
+        self.btn_fill_color = _color_preview_btn(fill_btn_color, fill_btn_color)
+        self.btn_fill_color.clicked.connect(lambda: self._pick_color(self.btn_fill_color))
+
+        # Arredondamento
+        self.sp_radius = QSpinBox()
+        self.sp_radius.setRange(0, 100)
+        self.sp_radius.setValue(int(config.get("corner_radius", 0)) if config else 0)
+        self.sp_radius.setSuffix(" px")
+
+        self.form.addRow("Tipo de Forma:", self.cb_shape_type)
+        self.form.addRow("Orientação da Linha:", self.cb_orientation)
+        self.form.addRow("Largura:", self.sp_width)
+        self.form.addRow("Altura:", self.sp_height)
+        self.form.addRow("Snap de Tamanho:", self.chk_snap)
+        self.form.addRow("Cor da Linha/Borda:", self.btn_stroke_color)
+        self.form.addRow("Espessura:", self.sp_stroke_width)
+        self.form.addRow("Estilo do Traço:", self.cb_stroke_style)
+        self.form.addRow("Preenchimento:", self.cb_fill_type)
+        self.form.addRow("Cor de Fundo:", self.btn_fill_color)
+        self.form.addRow("Raio dos Cantos:", self.sp_radius)
+
+        outer.addLayout(self.form)
+
+        # Botões
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #323238;")
+        outer.addWidget(sep)
+
+        btn_row = QHBoxLayout()
+        btn_ok = QPushButton("Salvar")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_ok)
+        btn_row.addWidget(btn_cancel)
+        outer.addLayout(btn_row)
+
+        self.cb_shape_type.currentIndexChanged.connect(self._update_visibility)
+        self.cb_fill_type.currentIndexChanged.connect(self._update_visibility)
+        self._update_visibility()
+
+        if self.chk_snap.isChecked():
+            self._on_snap_toggled(True)
+
+    def _on_snap_toggled(self, checked: bool):
+        if checked:
+            w = round(self.sp_width.value() / self.grid_size) * self.grid_size
+            h = round(self.sp_height.value() / self.grid_size) * self.grid_size
+            self.sp_width.setValue(max(self.grid_size, w))
+            self.sp_height.setValue(max(self.grid_size, h))
+            self.sp_width.setSingleStep(self.grid_size)
+            self.sp_height.setSingleStep(self.grid_size)
+        else:
+            self.sp_width.setSingleStep(10)
+            self.sp_height.setSingleStep(10)
+
+    def _pick_color(self, btn: QPushButton):
+        _open_color_picker(btn, self)
+        btn.setText(btn._color)
+
+    def _update_visibility(self):
+        shape = self.cb_shape_type.currentData()
+        is_line = (shape == "line")
+        is_rect = (shape == "rectangle")
+        fill_solid = (self.cb_fill_type.currentData() == "solid")
+
+        def _set_row_visible(widget, visible):
+            lbl = self.form.labelForField(widget)
+            widget.setVisible(visible)
+            if lbl:
+                lbl.setVisible(visible)
+
+        _set_row_visible(self.cb_orientation, is_line)
+        _set_row_visible(self.cb_fill_type, not is_line)
+        _set_row_visible(self.btn_fill_color, not is_line and fill_solid)
+        _set_row_visible(self.sp_radius, is_rect)
+
+    def get_config(self) -> dict:
+        shape_type = self.cb_shape_type.currentData()
+        fill_color = self.btn_fill_color._color if (shape_type != "line" and self.cb_fill_type.currentData() == "solid") else "transparent"
+        return {
+            "type": "shape",
+            "shape_type": shape_type,
+            "orientation": self.cb_orientation.currentData(),
+            "width": self.sp_width.value(),
+            "height": self.sp_height.value(),
+            "snap_size": self.chk_snap.isChecked(),
+            "stroke_color": self.btn_stroke_color._color,
+            "stroke_width": self.sp_stroke_width.value(),
+            "stroke_style": self.cb_stroke_style.currentData(),
+            "fill_color": fill_color,
+            "corner_radius": self.sp_radius.value() if shape_type == "rectangle" else 0
         }

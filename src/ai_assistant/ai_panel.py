@@ -12,11 +12,11 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTextEdit, QProgressBar, QFrame, QInputDialog,
-    QMessageBox, QFileDialog, QScrollArea, QSizePolicy
+    QMessageBox, QFileDialog, QScrollArea, QSizePolicy, QComboBox
 )
 from PyQt6.QtGui import QTextCursor, QFont
 
-from src.ai_assistant.ai_config import load_ai_config
+from src.ai_assistant.ai_config import load_ai_config, save_ai_config
 from src.ai_assistant.ai_dialogs import AIConfigDialog
 from src.ai_assistant.ai_client import AICopilotWorker
 from src.ai_assistant.action_capture import ActionCaptureEngine
@@ -73,6 +73,7 @@ class AIBubbleWidget(QWidget):
     create_widget_clicked = pyqtSignal(dict)
     apply_filter_clicked = pyqtSignal(str)
     update_doc_clicked = pyqtSignal(str)
+    retry_clicked = pyqtSignal()
 
     def __init__(self, text: str = "", is_streaming: bool = False, parent=None):
         super().__init__(parent)
@@ -98,9 +99,9 @@ class AIBubbleWidget(QWidget):
         self.bubble_layout.setSpacing(8)
 
         # Cabeçalho do Copilot
-        hdr = QLabel("CAN Copilot")
-        hdr.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold; background: transparent;")
-        self.bubble_layout.addWidget(hdr)
+        self.hdr = QLabel("CAN Copilot")
+        self.hdr.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold; background: transparent;")
+        self.bubble_layout.addWidget(self.hdr)
 
         # Conteúdo de Texto
         self.lbl_text = QLabel()
@@ -125,6 +126,20 @@ class AIBubbleWidget(QWidget):
             self.set_content(text)
 
     def set_content(self, text: str):
+        # Restaura estilo normal
+        self.hdr.setText("CAN Copilot")
+        self.hdr.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold; background: transparent;")
+        self.bubble.setStyleSheet("""
+            QFrame {
+                background-color: #27272a;
+                color: #e4e4e7;
+                border: 1px solid #3f3f46;
+                border-radius: 18px;
+                border-bottom-left-radius: 3px;
+                padding: 10px 14px;
+            }
+        """)
+
         # Remove blocos de ação do texto visível
         clean_text = re.sub(r'```(?:json:create_widget|json:apply_filter|markdown:update_doc)[\s\S]*?```', '', text).strip()
         
@@ -136,6 +151,56 @@ class AIBubbleWidget(QWidget):
 
         # Extrai e renderiza botões de ação
         self._extract_actions(text)
+
+    def set_error(self, err_msg: str, allow_retry: bool = True):
+        """Apresenta a mensagem em formato de erro e adiciona botão de retentativa."""
+        self.hdr.setText("CAN Copilot • Falha na requisição")
+        self.hdr.setStyleSheet("color: #ef4444; font-size: 11px; font-weight: bold; background: transparent;")
+        self.bubble.setStyleSheet("""
+            QFrame {
+                background-color: #201416;
+                color: #fecaca;
+                border: 1px solid #7f1d1d;
+                border-radius: 18px;
+                border-bottom-left-radius: 3px;
+                padding: 10px 14px;
+            }
+        """)
+
+        clean_err = err_msg.replace("\n", "<br>")
+        self.lbl_text.setText(f"<span style='color: #fca5a5;'>{clean_err}</span>")
+
+        # Limpa ações anteriores
+        while self.actions_layout.count():
+            item = self.actions_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if allow_retry:
+            btn_retry = QPushButton("🔄 Tentar Novamente")
+            btn_retry.setToolTip("Reenviar esta solicitação para o CAN Copilot")
+            btn_retry.setStyleSheet("""
+                QPushButton {
+                    background-color: #dc2626;
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:hover {
+                    background-color: #b91c1c;
+                }
+                QPushButton:pressed {
+                    background-color: #991b1b;
+                }
+            """)
+            btn_retry.clicked.connect(self.retry_clicked.emit)
+            self.actions_layout.addWidget(btn_retry)
+            self.actions_box.show()
+        else:
+            self.actions_box.hide()
 
     def _extract_actions(self, full_text: str):
         while self.actions_layout.count():
@@ -217,7 +282,7 @@ class CANCopilotPanel(QWidget):
         self.capture_engine.capture_finished.connect(self._on_capture_finished)
 
         self._build_ui()
-        self._update_model_badge()
+        self._populate_model_selector()
         self._update_record_button_text()
         self._set_status("ready", "Pronto")
 
@@ -257,14 +322,35 @@ class CANCopilotPanel(QWidget):
         title_lbl = QLabel("<b>CAN Copilot</b>")
         title_lbl.setStyleSheet("font-size: 13px; color: #38bdf8; font-weight: bold;")
         
-        self.lbl_model_badge = QLabel("Gemini")
-        self.lbl_model_badge.setStyleSheet(
-            "background-color: #202024; color: #38bdf8; font-size: 10px; font-weight: bold;"
-            " padding: 3px 8px; border-radius: 4px; border: 1px solid #323238;"
-        )
+        self.cb_quick_model = QComboBox()
+        self.cb_quick_model.setToolTip("Selecione o modelo de IA diretamente")
+        self.cb_quick_model.setStyleSheet("""
+            QComboBox {
+                background-color: #202024;
+                color: #38bdf8;
+                border: 1px solid #323238;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: bold;
+                min-width: 140px;
+            }
+            QComboBox:hover {
+                border-color: #38bdf8;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #202024;
+                color: #f4f4f5;
+                selection-background-color: #0284c7;
+                selection-color: white;
+                border: 1px solid #323238;
+                padding: 4px;
+            }
+        """)
+        self.cb_quick_model.currentTextChanged.connect(self._on_quick_model_changed)
 
         toolbar.addWidget(title_lbl)
-        toolbar.addWidget(self.lbl_model_badge)
+        toolbar.addWidget(self.cb_quick_model)
         toolbar.addStretch()
 
         self.btn_clear = QPushButton("Limpar")
@@ -423,17 +509,54 @@ class CANCopilotPanel(QWidget):
         )
         self._add_ai_bubble(welcome_text)
 
-    def _update_model_badge(self):
+    def _populate_model_selector(self):
+        """Preenche o seletor de modelos na barra do Copilot e seleciona o ativo."""
         cfg = load_ai_config()
-        model_name = cfg.get("model", "Gemini")
         provider = cfg.get("provider", "google_gemini")
-        display_name = f"Gemini ({model_name})" if provider == "google_gemini" else model_name
-        self.lbl_model_badge.setText(display_name)
+        current_model = cfg.get("model", "gemini-3.8-flash").strip().replace("models/", "").replace("google/", "")
+
+        if current_model in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.0-pro-exp-02-05", "gemini-1.0-pro"]:
+            current_model = "gemini-3.8-flash"
+
+        gemini_models = [
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash-lite",
+        ]
+        openai_models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3-mini"]
+
+        models = list(gemini_models) if provider == "google_gemini" else list(openai_models)
+
+        if current_model and current_model not in models:
+            models.append(current_model)
+
+        self.cb_quick_model.blockSignals(True)
+        self.cb_quick_model.clear()
+        self.cb_quick_model.addItems(models)
+        self.cb_quick_model.setCurrentText(current_model)
+        self.cb_quick_model.blockSignals(False)
+
+    def _on_quick_model_changed(self, new_model: str):
+        """Salva a alteração de modelo feita diretamente na barra do Copilot."""
+        if not new_model:
+            return
+        clean_model = new_model.strip().replace("models/", "").replace("google/", "")
+        cfg = load_ai_config()
+        cfg["model"] = clean_model
+        save_ai_config(cfg)
+        self._set_status("ready", f"Modelo: {clean_model}")
 
     def _open_config_dialog(self):
         dlg = AIConfigDialog(self)
         if dlg.exec():
-            self._update_model_badge()
+            self._populate_model_selector()
             self._update_record_button_text()
 
     def clear_context(self):
@@ -598,10 +721,42 @@ class CANCopilotPanel(QWidget):
 
     def _on_error_occurred(self, err_msg: str):
         self.btn_send.setEnabled(True)
-        self._set_status("error", "Erro")
+        self._set_status("error", "Erro na Requisição")
         if self.current_ai_bubble:
-            self.current_ai_bubble.set_content(f"**Erro:** {err_msg}")
+            bubble = self.current_ai_bubble
+            bubble.set_error(err_msg, allow_retry=True)
+            try:
+                bubble.retry_clicked.disconnect()
+            except Exception:
+                pass
+            bubble.retry_clicked.connect(lambda b=bubble: self._on_retry_message(b))
         self._scroll_to_bottom()
+
+    def _on_retry_message(self, bubble: AIBubbleWidget):
+        """Reenvia a mensagem anterior para o Copilot sem necessidade de redigitar."""
+        if self.current_worker and self.current_worker.isRunning():
+            return
+        if not self.history:
+            return
+
+        extra_context = ""
+        if self.annotation_manager and hasattr(self.annotation_manager, "filename"):
+            try:
+                if os.path.exists(self.annotation_manager.filename):
+                    with open(self.annotation_manager.filename, "r", encoding="utf-8") as f:
+                        extra_context = f"Anotações do Projeto Atual (.md):\n```markdown\n{f.read()}\n```"
+            except Exception:
+                pass
+
+        self.current_ai_bubble = bubble
+        self.current_ai_bubble.set_content("<i>Tentando novamente...</i>")
+        self._set_status("thinking", "Tentando novamente...")
+        self.btn_send.setEnabled(False)
+
+        self.current_worker = AICopilotWorker(self.history, extra_context=extra_context, parent=self)
+        self.current_worker.response_finished.connect(self._on_response_finished)
+        self.current_worker.error_occurred.connect(self._on_error_occurred)
+        self.current_worker.start()
 
     def _trigger_create_widget(self, config: dict):
         self.create_widget_requested.emit(config)

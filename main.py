@@ -85,7 +85,7 @@ from PyQt6.QtCore import Qt, QTimer, QDateTime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel,
     QMessageBox, QInputDialog, QLineEdit, QWidget, QHBoxLayout, QSlider,
-    QVBoxLayout, QTabWidget, QDockWidget
+    QVBoxLayout, QTabWidget, QDockWidget, QComboBox
 )
 from PyQt6.QtGui import QIcon
 
@@ -97,10 +97,25 @@ from src.transmit_tab import TransmitTab
 from src.widgets_tab import WidgetsTab
 from src.error_tab import ErrorTab
 from src.import_dialog import ImportDialog
+from src.docs_tab import DocsTab
 from src.ai_assistant.ai_panel import CANCopilotPanel
 from src.version import __version__
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+class ClickableSlider(QSlider):
+    """QSlider aprimorado com suporte a salto direto com clique do mouse em qualquer ponto da barra."""
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            width = self.width()
+            if width > 0:
+                x = event.position().x() if hasattr(event, "position") else event.x()
+                val = int(self.minimum() + (self.maximum() - self.minimum()) * (x / width))
+                val = max(self.minimum(), min(self.maximum(), val))
+                self.setValue(val)
+                self.sliderMoved.emit(val)
+        super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -131,6 +146,7 @@ class MainWindow(QMainWindow):
         self.transmit_tab = TransmitTab(self.can_thread)
         self.widgets_tab = WidgetsTab(self.can_thread)
         self.error_tab = ErrorTab()
+        self.docs_tab = DocsTab(BASE_DIR, self.annotation_manager, parent=self)
 
         # CAN Copilot (Assistente IA)
         self.copilot_panel = CANCopilotPanel(self.can_thread, self.annotation_manager, self)
@@ -299,6 +315,7 @@ class MainWindow(QMainWindow):
         tab_widget.addTab(self.transmit_tab, "Transmitir")
         tab_widget.addTab(self.widgets_tab, "Widgets")
         tab_widget.addTab(self.error_tab, "Erros CAN")
+        tab_widget.addTab(self.docs_tab, "Documentação")
         
         central_master = QWidget()
         central_layout = QVBoxLayout(central_master)
@@ -306,33 +323,130 @@ class MainWindow(QMainWindow):
         central_layout.setSpacing(0)
         central_layout.addWidget(tab_widget, 1)
         
-        # Player Bar
+        # ── Player Bar (Controles de Playback) ────────────────────────────────
         self.player_bar = QWidget()
-        self.player_bar.setStyleSheet("background-color: #18181b; border-top: 1px solid #323238;")
+        self.player_bar.setStyleSheet("""
+            QWidget#PlayerBar {
+                background-color: #18181b;
+                border-top: 1px solid #323238;
+            }
+        """)
+        self.player_bar.setObjectName("PlayerBar")
         player_layout = QHBoxLayout(self.player_bar)
-        player_layout.setContentsMargins(15, 8, 15, 8)
+        player_layout.setContentsMargins(16, 8, 16, 8)
+        player_layout.setSpacing(10)
+
+        # Botão Play / Pause
+        self.btn_play_pause = QPushButton("⏸ Pausar")
+        self.btn_play_pause.setToolTip("Pausar / Retomar reprodução")
+        self.btn_play_pause.setFixedWidth(105)
+        self.btn_play_pause.setStyleSheet(self._play_button_style(playing=True))
+        self.btn_play_pause.clicked.connect(self._toggle_play_pause)
+
+        # Botão Parar (Stop)
+        self.btn_player_stop = QPushButton("⏹ Parar")
+        self.btn_player_stop.setToolTip("Parar reprodução e voltar ao início")
+        self.btn_player_stop.setFixedWidth(80)
+        self.btn_player_stop.setStyleSheet(
+            "QPushButton { background-color: #27272a; color: #f87171; border: 1px solid #451a1a; border-radius: 4px; padding: 5px 12px; font-weight: bold; font-size: 11px; }"
+            "QPushButton:hover { background-color: #451a1a; color: white; }"
+        )
+        self.btn_player_stop.clicked.connect(self._stop_playback)
+
+        # Botão Loop
+        self.btn_player_loop = QPushButton("🔁 Loop")
+        self.btn_player_loop.setToolTip("Repetir reprodução continuamente")
+        self.btn_player_loop.setCheckable(True)
+        self.btn_player_loop.setFixedWidth(75)
+        self.btn_player_loop.setStyleSheet("""
+            QPushButton {
+                background-color: #202024;
+                color: #a1a1aa;
+                border: 1px solid #323238;
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #2e3035;
+                color: white;
+            }
+            QPushButton:checked {
+                background-color: #1e3a8a;
+                color: #93c5fd;
+                border-color: #3b82f6;
+            }
+        """)
+        self.btn_player_loop.toggled.connect(self._toggle_playback_loop)
+
+        # Seletor de Velocidade
+        lbl_speed = QLabel("Vel:")
+        lbl_speed.setStyleSheet("color: #71717a; font-size: 11px; font-weight: bold;")
         
-        self.lbl_player_info = QLabel("▶ Reproduzindo:")
-        self.lbl_player_info.setStyleSheet("color: #a1a1aa; font-weight: bold; font-size: 12px; min-width: 150px;")
-        
-        self.playback_slider = QSlider(Qt.Orientation.Horizontal)
-        self.playback_slider.setRange(0, 100)
-        self.playback_slider.setToolTip("Controle de Playback")
+        self.cb_player_speed = QComboBox()
+        self.cb_player_speed.addItems(["0.25x", "0.5x", "1.0x", "2.0x", "5.0x", "10.0x"])
+        self.cb_player_speed.setCurrentText("1.0x")
+        self.cb_player_speed.setToolTip("Velocidade de reprodução")
+        self.cb_player_speed.setStyleSheet("""
+            QComboBox {
+                background-color: #202024;
+                color: #e4e4e7;
+                border: 1px solid #323238;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #202024;
+                color: #f4f4f5;
+                selection-background-color: #0284c7;
+                selection-color: white;
+                border: 1px solid #323238;
+            }
+        """)
+        self.cb_player_speed.currentTextChanged.connect(self._on_speed_changed)
+
+        # Status
+        self.lbl_player_status = QLabel("▶ Reproduzindo")
+        self.lbl_player_status.setStyleSheet("color: #10b981; font-weight: bold; font-size: 11px; min-width: 95px;")
+
+        # Nome do arquivo
+        self.lbl_player_info = QLabel("Arquivo:")
+        self.lbl_player_info.setStyleSheet("color: #d4d4d8; font-size: 11px; font-weight: 500;")
+
+        # Slider da agulha de tempo
+        self.playback_slider = ClickableSlider(Qt.Orientation.Horizontal)
+        self.playback_slider.setRange(0, 1000)
+        self.playback_slider.setToolTip("Arraste ou clique para navegar na linha do tempo do Playback")
         self.playback_slider.sliderMoved.connect(self._on_seek)
         self.playback_slider.setStyleSheet("""
             QSlider::groove:horizontal { border: 1px solid #323238; height: 8px; background: #202024; border-radius: 4px; }
             QSlider::sub-page:horizontal { background: #3b82f6; border-radius: 4px; }
-            QSlider::handle:horizontal { background: white; border: 1px solid #5c5c5c; width: 14px; margin-top: -3px; margin-bottom: -3px; border-radius: 7px; }
+            QSlider::handle:horizontal { background: #ffffff; border: 2px solid #3b82f6; width: 16px; margin-top: -4px; margin-bottom: -4px; border-radius: 8px; }
+            QSlider::handle:horizontal:hover { background: #93c5fd; border-color: #60a5fa; }
         """)
-        
+
+        # Contadores de frames e porcentagem
+        self.lbl_player_frame = QLabel("0 / 0 frames")
+        self.lbl_player_frame.setStyleSheet("color: #a1a1aa; font-size: 11px; min-width: 100px;")
+
         self.lbl_player_progress = QLabel("0%")
-        self.lbl_player_progress.setStyleSheet("color: white; font-weight: bold; min-width: 40px; margin-left: 8px;")
+        self.lbl_player_progress.setStyleSheet("color: white; font-weight: bold; font-size: 11px; min-width: 40px;")
         self.lbl_player_progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        
+
+        player_layout.addWidget(self.btn_play_pause)
+        player_layout.addWidget(self.btn_player_stop)
+        player_layout.addWidget(self.btn_player_loop)
+        player_layout.addWidget(lbl_speed)
+        player_layout.addWidget(self.cb_player_speed)
+        player_layout.addWidget(self.lbl_player_status)
         player_layout.addWidget(self.lbl_player_info)
         player_layout.addWidget(self.playback_slider, 1)
+        player_layout.addWidget(self.lbl_player_frame)
         player_layout.addWidget(self.lbl_player_progress)
-        
+
         self.player_bar.hide()
         central_layout.addWidget(self.player_bar)
 
@@ -363,6 +477,8 @@ class MainWindow(QMainWindow):
 
     def _on_ai_update_doc(self, new_content: str):
         self.annotation_manager.append_raw_markdown(new_content)
+        if hasattr(self, "docs_tab"):
+            self.docs_tab.reload_file_if_open("CANweaver_Projeto.md")
         self.statusBar().showMessage("CAN Copilot: Documentação do projeto atualizada.", 4000)
 
 
@@ -388,6 +504,9 @@ class MainWindow(QMainWindow):
 
         # Apaga anotações da memória e do arquivo
         self.annotation_manager.clear()
+        if hasattr(self, "docs_tab"):
+            self.docs_tab.refresh_files()
+            self.docs_tab.reload_file_if_open("CANweaver_Projeto.md")
 
         # Reseta o estado do projeto
         self.current_project_path = None
@@ -498,7 +617,9 @@ class MainWindow(QMainWindow):
             self._save_project_as()
             return
         try:
-            # Ao salvar no mesmo arquivo, assume seleção total (era um .cwp)
+            # Garantir extensão se porventura estiver sem
+            if not os.path.splitext(self.current_project_path)[1]:
+                self.current_project_path += ".cwp"
             sel = {"annotations": True, "transmit": True, "dashboard": True}
             self._write_project(self.current_project_path, sel)
             self.statusBar().showMessage("Projeto salvo.", 3000)
@@ -528,19 +649,33 @@ class MainWindow(QMainWindow):
                        "transmit": "JSON (*.json)",
                        "dashboard": "JSON (*.json)"}
             filter_str = ext_map[checked[0]]
+            default_ext = ".md" if checked[0] == "annotations" else ".json"
         else:
-            filter_str = "CANweaver Project (*.cwp)"
+            filter_str = "CANweaver Project (*.cwp);;Arquivos ZIP (*.zip)"
+            default_ext = ".cwp"
 
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Salvar Projeto", dlg.get_name(), filter_str
+        default_name = dlg.get_name()
+        if not os.path.splitext(default_name)[1]:
+            default_name += default_ext
+
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Salvar Projeto", default_name, filter_str
         )
         if not file_path:
             return
 
+        # Garantir extensão mesmo em sistemas Linux/GTK onde o QFileDialog pode omitir
+        ext = os.path.splitext(file_path)[1].lower()
+        if not ext:
+            if "zip" in selected_filter.lower():
+                file_path += ".zip"
+            else:
+                file_path += default_ext
+
         try:
             self._write_project(file_path, selection)
-            # Só atualiza o projeto "ativo" se salvou como .cwp completo
-            if file_path.endswith(".cwp"):
+            # Atualiza o projeto "ativo" se salvou como .cwp ou .zip completo
+            if file_path.endswith((".cwp", ".zip")):
                 self._set_project_path(file_path)
             QMessageBox.information(self, "Sucesso",
                                     f"Arquivo salvo em:\n{file_path}")
@@ -550,8 +685,32 @@ class MainWindow(QMainWindow):
     def _load_project_file(self, file_path: str, is_autosave=False):
         import json, zipfile
         try:
+            # Se o arquivo não existir diretamente mas existir com .cwp ou .zip
+            if not os.path.exists(file_path):
+                if os.path.exists(file_path + ".cwp"):
+                    file_path = file_path + ".cwp"
+                elif os.path.exists(file_path + ".zip"):
+                    file_path = file_path + ".zip"
+
+            if not os.path.isfile(file_path):
+                QMessageBox.critical(self, "Erro", f"Arquivo não encontrado:\n{file_path}")
+                return
+
+            if not zipfile.is_zipfile(file_path):
+                QMessageBox.critical(self, "Erro", "O arquivo selecionado não é um arquivo compactado (ZIP/CWP) válido.")
+                return
+
             with zipfile.ZipFile(file_path, 'r') as zipf:
                 names = zipf.namelist()
+                valid_project_files = {"CANweaver_Projeto.md", "transmit_tasks.json", "dashboard_layout.json"}
+                found = [f for f in valid_project_files if f in names]
+                if not found:
+                    QMessageBox.warning(
+                        self, "Projeto Não Reconhecido",
+                        "O arquivo ZIP selecionado não contém dados de projeto do CANweaver reconhecidos "
+                        "(não foram encontrados 'CANweaver_Projeto.md', 'transmit_tasks.json' ou 'dashboard_layout.json')."
+                    )
+                    return
 
                 if "CANweaver_Projeto.md" in names:
                     md_content = zipf.read("CANweaver_Projeto.md").decode("utf-8")
@@ -559,6 +718,9 @@ class MainWindow(QMainWindow):
                     with open(md_path, "w", encoding="utf-8") as f:
                         f.write(md_content)
                     self.annotation_manager.load()
+                    if hasattr(self, "docs_tab"):
+                        self.docs_tab.refresh_files()
+                        self.docs_tab.reload_file_if_open("CANweaver_Projeto.md")
 
                 if "transmit_tasks.json" in names:
                     tasks = json.loads(zipf.read("transmit_tasks.json").decode("utf-8"))
@@ -570,19 +732,19 @@ class MainWindow(QMainWindow):
 
             if not is_autosave:
                 self._set_project_path(file_path)
-                QMessageBox.information(self, "Projeto Aberto", f"Projeto carregado:\n{os.path.basename(file_path)}")
+                QMessageBox.information(self, "Projeto Aberto", f"Projeto carregado com sucesso:\n{os.path.basename(file_path)}")
             else:
                 self.statusBar().showMessage("Projeto recuperado com sucesso.", 5000)
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao carregar projeto:\n{e}")
 
     def _open_project(self):
-        """Abre um .cwp e restaura o estado de todas as abas."""
+        """Abre um .cwp ou .zip e restaura o estado de todas as abas."""
         from PyQt6.QtWidgets import QFileDialog
 
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Abrir Projeto", "",
-            "CANweaver Project (*.cwp);;Arquivos ZIP (*.zip)"
+            "Projetos CANweaver (*.cwp *.zip);;CANweaver Project (*.cwp);;Arquivos ZIP (*.zip);;Todos os Arquivos (*)"
         )
         if not file_path:
             return
@@ -674,7 +836,10 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Aviso", "Nenhum arquivo selecionado.")
                 return
             self.can_thread.playback_file = config["playback_file"]
-            self.lbl_status.setText(f"Playback: {config['playback_file'].split('/')[-1]}")
+            self.can_thread.playback_transmit = config.get("playback_transmit", False)
+            self.can_thread.playback_loop = config.get("playback_loop", False)
+            self.can_thread.playback_speed = 1.0
+            self.lbl_status.setText(f"Playback: {os.path.basename(config['playback_file'])}")
         else:
             self.lbl_status.setText("Simulado")
 
@@ -695,7 +860,31 @@ class MainWindow(QMainWindow):
 
         if config["mode"] == "PLAYBACK":
             self.player_bar.show()
-            self.lbl_player_info.setText(f"Reproduzindo: {os.path.basename(config['playback_file'])}")
+            self.lbl_player_info.setText(f"Arquivo: {os.path.basename(config['playback_file'])}")
+            self.lbl_player_status.setText("▶ Reproduzindo")
+            self.lbl_player_status.setStyleSheet("color: #10b981; font-weight: bold; font-size: 11px;")
+            self.btn_play_pause.setText("⏸ Pausar")
+            self.btn_play_pause.setStyleSheet(self._play_button_style(playing=True))
+            
+            is_loop = config.get("playback_loop", False)
+            self.btn_player_loop.blockSignals(True)
+            self.btn_player_loop.setChecked(is_loop)
+            self.btn_player_loop.blockSignals(False)
+
+            self.cb_player_speed.blockSignals(True)
+            self.cb_player_speed.setCurrentText("1.0x")
+            self.cb_player_speed.blockSignals(False)
+
+            self.playback_slider.blockSignals(True)
+            self.playback_slider.setValue(0)
+            self.playback_slider.blockSignals(False)
+            self.lbl_player_progress.setText("0%")
+            self.lbl_player_frame.setText("0 frames")
+
+            try:
+                self.can_thread.playback_progress.disconnect()
+            except Exception:
+                pass
             self.can_thread.playback_progress.connect(self._update_slider)
         else:
             self.player_bar.hide()
@@ -703,26 +892,107 @@ class MainWindow(QMainWindow):
         self.analysis_tab.clear_data()
         self.can_thread.start()
 
+    def _play_button_style(self, playing: bool) -> str:
+        if playing:
+            return """
+                QPushButton {
+                    background-color: #2563eb;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 5px 12px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:hover {
+                    background-color: #1d4ed8;
+                }
+            """
+        else:
+            return """
+                QPushButton {
+                    background-color: #10b981;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 5px 12px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:hover {
+                    background-color: #059669;
+                }
+            """
+
+    def _toggle_play_pause(self):
+        if not self.can_thread:
+            return
+        is_paused = self.can_thread.toggle_pause_playback()
+        if is_paused:
+            self.btn_play_pause.setText("▶ Reproduzir")
+            self.btn_play_pause.setStyleSheet(self._play_button_style(playing=False))
+            self.lbl_player_status.setText("⏸ Pausado")
+            self.lbl_player_status.setStyleSheet("color: #f59e0b; font-weight: bold; font-size: 11px;")
+        else:
+            self.btn_play_pause.setText("⏸ Pausar")
+            self.btn_play_pause.setStyleSheet(self._play_button_style(playing=True))
+            self.lbl_player_status.setText("▶ Reproduzindo")
+            self.lbl_player_status.setStyleSheet("color: #10b981; font-weight: bold; font-size: 11px;")
+
+    def _stop_playback(self):
+        if not self.can_thread:
+            return
+        self.can_thread.stop_playback()
+        self.btn_play_pause.setText("▶ Reproduzir")
+        self.btn_play_pause.setStyleSheet(self._play_button_style(playing=False))
+        self.lbl_player_status.setText("⏹ Parado")
+        self.lbl_player_status.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 11px;")
+        self.playback_slider.blockSignals(True)
+        self.playback_slider.setValue(0)
+        self.playback_slider.blockSignals(False)
+        self.lbl_player_progress.setText("0%")
+        self.lbl_player_frame.setText("0 frames")
+
+    def _toggle_playback_loop(self, checked: bool):
+        if self.can_thread:
+            self.can_thread.set_playback_loop(checked)
+
+    def _on_speed_changed(self, text: str):
+        try:
+            val = float(text.replace("x", "").strip())
+            if self.can_thread:
+                self.can_thread.set_playback_speed(val)
+        except ValueError:
+            pass
+
     def _on_seek(self, value):
-        if self.can_thread and self.can_thread.isRunning():
+        if self.can_thread:
             self.can_thread.seek_playback(value)
+            pct = int((value / 1000.0) * 100)
+            self.lbl_player_progress.setText(f"{pct}%")
 
     def _update_slider(self, current, total):
-        # Evita loop de eventos no PyQt com checagem
         if total > 0 and not self.playback_slider.isSliderDown():
-            pct = int((current / float(total)) * 100)
-            self.playback_slider.setValue(pct)
-            self.lbl_player_progress.setText(f"{pct}%")
+            val = int((current / float(total)) * 1000)
+            self.playback_slider.blockSignals(True)
+            self.playback_slider.setValue(val)
+            self.playback_slider.blockSignals(False)
             
-            if current == 0 and pct == 0:
-                self.lbl_player_info.setText("Reiniciando (Loop)..." if getattr(self.can_thread, 'playback_loop', False) else "Iniciando...")
-            elif current > 0:
-                self.lbl_player_info.setText(f"Reproduzindo {current}/{total} frames")
+            pct = int((current / float(total)) * 100)
+            self.lbl_player_progress.setText(f"{pct}%")
+            self.lbl_player_frame.setText(f"{current + 1} / {total} frames")
 
     def _handle_worker_error(self, err_msg: str):
-        QMessageBox.warning(self, "Aviso da Thread", err_msg)
         if "Reprodução concluída" in err_msg:
             self.lbl_status.setText("Reprodução Finalizada")
+            if hasattr(self, "btn_play_pause"):
+                self.btn_play_pause.setText("▶ Reproduzir")
+                self.btn_play_pause.setStyleSheet(self._play_button_style(playing=False))
+            if hasattr(self, "lbl_player_status"):
+                self.lbl_player_status.setText("✔ Concluído")
+                self.lbl_player_status.setStyleSheet("color: #3b82f6; font-weight: bold; font-size: 11px;")
+        else:
+            QMessageBox.warning(self, "Aviso da Thread", err_msg)
 
     # ------------------------------------------------------------------
     # Gravação

@@ -64,7 +64,7 @@ class AICopilotWorker(QThread):
             self.error_occurred.emit(f"Erro na comunicação com a IA: {e}")
 
     def _run_gemini(self, api_key: str, model: str, temperature: float):
-        clean_model = model.strip().replace("models/", "")
+        clean_model = model.strip().replace("models/", "").replace("google/", "")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={api_key}"
         headers = {
             "Content-Type": "application/json",

@@ -13,7 +13,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "ai_config.json")
 DEFAULT_CONFIG = {
     "provider": "google_gemini",
     "api_key": "",
-    "model": "gemini-1.5-flash",
+    "model": "gemini-3.8-flash",
     "custom_endpoint": "",
     "temperature": 0.3,
     "max_tokens": 4096,
@@ -41,9 +41,12 @@ def load_ai_config() -> dict:
     if loaded_dict:
         res.update(loaded_dict)
 
-    # Limpa prefixos caso existam
+    # Limpa prefixos caso existam (ex: models/ ou google/) e migra modelos abaixo de 2.5
     if res.get("model"):
-        res["model"] = res["model"].strip().replace("models/", "")
+        clean_m = res["model"].strip().replace("models/", "").replace("google/", "")
+        if clean_m in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.0-pro-exp-02-05", "gemini-1.0-pro"]:
+            clean_m = "gemini-3.8-flash"
+        res["model"] = clean_m
 
     return res
 

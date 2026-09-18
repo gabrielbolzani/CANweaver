@@ -174,7 +174,18 @@ class AIConfigDialog(QDialog):
         self.cb_model.clear()
 
         if provider == "google_gemini":
-            models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-3.6-flash"]
+            models = [
+                "gemini-3.8-flash",
+                "gemini-3.7-flash",
+                "gemini-3.6-flash",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-pro-preview",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+                "gemini-2.5-flash-lite",
+            ]
             self.cb_model.addItems(models)
             self.btn_get_key.setText("Obter Chave Gratuita no Google AI Studio (Gemini)")
             self.txt_custom_endpoint.setEnabled(False)
@@ -194,7 +205,7 @@ class AIConfigDialog(QDialog):
 
         saved_model = self.cfg.get("model", "")
         if saved_model:
-            self.cb_model.setCurrentText(saved_model.replace("models/", ""))
+            self.cb_model.setCurrentText(saved_model.replace("models/", "").replace("google/", ""))
 
     def _test_connection(self):
         api_key = self.txt_api_key.text().strip()

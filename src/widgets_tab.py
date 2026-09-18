@@ -3,26 +3,31 @@ widgets_tab.py — Widget da Aba de Painéis / Gauges
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, QSize
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QMenu, QProgressBar, QSlider, QSpinBox, QLineEdit, QPlainTextEdit
+    QFrame, QMenu, QProgressBar, QSlider, QSpinBox, QLineEdit, QPlainTextEdit,
+    QRubberBand, QComboBox, QSizePolicy
 )
 from PyQt6.QtGui import QAction, QColor, QPainter, QPen, QBrush, QFont, QTextCursor
 import math
 
 from src.widget_dialogs import (
     LabelDialog, IndicatorDialog, ControllerDialog, GaugeDialog, MultiIndicatorDialog,
-    IncrementalControllerDialog, TerminalDialog
+    IncrementalControllerDialog, TerminalDialog, ShapeDialog
 )
 
 class CanvasWidget(QFrame):
-    """Canvas com opção de grade e snap magnético para auxiliar no posicionamento."""
+    """Canvas com opção de grade, snap magnético, multi-seleção e caixa de seleção (rubberband)."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.show_grid = False
         self.snap_to_grid = True
         self.grid_size = 20
+        self.selected_widgets: set[DashboardWidget] = set()
+        self._rubber_band: QRubberBand | None = None
+        self._rubber_origin = QPoint()
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -36,56 +41,205 @@ class CanvasWidget(QFrame):
         for y in range(0, self.height(), grid_size):
             painter.drawLine(0, y, self.width(), y)
 
-class DashboardWidget(QWidget):
-    """Classe base para widgets arrastáveis no Canvas."""
-    def __init__(self, parent=None, config=None):
-        super().__init__(parent)
-        self.config = config
-        self.edit_mode = False
-        self._drag_start_pos = None
-        self.edit_callback = None       # Definido por WidgetsTab ao posicionar o widget
-        self.duplicate_callback = None  # Definido por WidgetsTab ao posicionar o widget
+    def select_widget(self, w: DashboardWidget, add: bool = False):
+        if not add:
+            self.clear_selection()
+        self.selected_widgets.add(w)
+        w.set_selected(True)
 
-    def set_edit_mode(self, enabled):
-        self.edit_mode = enabled
-        if enabled:
-            self.setStyleSheet("DashboardWidget { border: 1px dashed #a1a1aa; background-color: rgba(255,255,255,10); }")
-            for child in self.findChildren(QWidget):
-                child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        else:
-            self.setStyleSheet("")
-            for child in self.findChildren(QWidget):
-                child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+    def deselect_widget(self, w: DashboardWidget):
+        if w in self.selected_widgets:
+            self.selected_widgets.remove(w)
+            w.set_selected(False)
+
+    def clear_selection(self):
+        for w in list(self.selected_widgets):
+            w.set_selected(False)
+        self.selected_widgets.clear()
+
+    def select_all(self):
+        self.clear_selection()
+        for w in self.findChildren(DashboardWidget):
+            self.select_widget(w, add=True)
+
+    def delete_selected(self):
+        if not self.selected_widgets:
+            return
+        for w in list(self.selected_widgets):
+            w.setParent(None)
+            w.deleteLater()
+        self.selected_widgets.clear()
+
+    def keyPressEvent(self, event):
+        parent_tab = self.parent()
+        while parent_tab and not hasattr(parent_tab, "edit_mode"):
+            parent_tab = parent_tab.parent()
+        is_edit = parent_tab.edit_mode if parent_tab else False
+
+        if is_edit:
+            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                self.delete_selected()
+                return
+            elif event.key() == Qt.Key.Key_A and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                self.select_all()
+                return
+            elif event.key() == Qt.Key.Key_Escape:
+                self.clear_selection()
+                return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event):
-        if self.edit_mode and event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_pos = event.pos()
-            self.raise_()
+        parent_tab = self.parent()
+        while parent_tab and not hasattr(parent_tab, "edit_mode"):
+            parent_tab = parent_tab.parent()
+        is_edit = parent_tab.edit_mode if parent_tab else False
+
+        if is_edit and event.button() == Qt.MouseButton.LeftButton:
+            if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                self.clear_selection()
+            self._rubber_origin = event.pos()
+            if not self._rubber_band:
+                self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+            self._rubber_band.setGeometry(QRect(self._rubber_origin, QSize()))
+            self._rubber_band.show()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self.edit_mode and self._drag_start_pos is not None:
-            raw_pos = self.pos() + event.pos() - self._drag_start_pos
-            parent = self.parent()
-            if parent and hasattr(parent, "snap_to_grid") and parent.snap_to_grid:
-                grid_size = getattr(parent, "grid_size", 20)
-                snapped_x = round(raw_pos.x() / grid_size) * grid_size
-                snapped_y = round(raw_pos.y() / grid_size) * grid_size
-                snapped_x = max(0, min(snapped_x, parent.width() - self.width()))
-                snapped_y = max(0, min(snapped_y, parent.height() - self.height()))
-                self.move(snapped_x, snapped_y)
-            else:
-                self.move(raw_pos)
+        if self._rubber_band and self._rubber_band.isVisible():
+            rect = QRect(self._rubber_origin, event.pos()).normalized()
+            self._rubber_band.setGeometry(rect)
+            is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            for w in self.findChildren(DashboardWidget):
+                intersects = w.geometry().intersects(rect)
+                if intersects:
+                    w.set_selected(True)
+                elif not is_ctrl and w not in self.selected_widgets:
+                    w.set_selected(False)
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._rubber_band and self._rubber_band.isVisible():
+            rect = self._rubber_band.geometry()
+            self._rubber_band.hide()
+            is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            if not is_ctrl and rect.width() > 4 and rect.height() > 4:
+                self.selected_widgets.clear()
+            for w in self.findChildren(DashboardWidget):
+                if w.geometry().intersects(rect) and rect.width() > 4 and rect.height() > 4:
+                    self.selected_widgets.add(w)
+                    w.set_selected(True)
+                elif w in self.selected_widgets:
+                    w.set_selected(True)
+                else:
+                    w.set_selected(False)
+        super().mouseReleaseEvent(event)
+
+
+class DashboardWidget(QWidget):
+    """Classe base para widgets arrastáveis no Canvas com suporte a multi-seleção."""
+    def __init__(self, parent=None, config=None):
+        super().__init__(parent)
+        self.config = config
+        self.edit_mode = False
+        self.selected = False
+        self._drag_start_mouse = None
+        self._drag_start_pos = None
+        self.edit_callback = None       # Definido por WidgetsTab ao posicionar o widget
+        self.duplicate_callback = None  # Definido por WidgetsTab ao posicionar o widget
+
+    def set_selected(self, selected: bool):
+        self.selected = selected
+        self._update_style()
+
+    def set_edit_mode(self, enabled: bool):
+        self.edit_mode = enabled
+        if not enabled:
+            self.selected = False
+        self._update_style()
+        for child in self.findChildren(QWidget):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+
+    def _update_style(self):
+        if not self.edit_mode:
+            self.setStyleSheet("")
+            return
+        if self.selected:
+            self.setStyleSheet(
+                "DashboardWidget { border: 2px solid #3b82f6; background-color: rgba(59, 130, 246, 0.15); border-radius: 4px; }"
+            )
+        else:
+            self.setStyleSheet(
+                "DashboardWidget { border: 1px dashed #71717a; background-color: rgba(255, 255, 255, 0.03); border-radius: 4px; }"
+            )
+
+    def mousePressEvent(self, event):
+        if self.edit_mode and event.button() == Qt.MouseButton.LeftButton:
+            canvas = self.parent()
+            is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            if hasattr(canvas, "selected_widgets"):
+                if is_ctrl:
+                    if self in canvas.selected_widgets:
+                        canvas.deselect_widget(self)
+                    else:
+                        canvas.select_widget(self, add=True)
+                else:
+                    if self not in canvas.selected_widgets:
+                        canvas.clear_selection()
+                        canvas.select_widget(self, add=False)
+            
+            # Salva posições iniciais de todos os widgets selecionados para arrasto em conjunto
+            self._drag_start_mouse = event.globalPosition().toPoint()
+            target_set = getattr(canvas, "selected_widgets", {self})
+            if not target_set:
+                target_set = {self}
+            for w in target_set:
+                w._drag_start_pos = w.pos()
+                w.raise_()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.edit_mode and self._drag_start_mouse is not None:
+            delta = event.globalPosition().toPoint() - self._drag_start_mouse
+            canvas = self.parent()
+            snap = getattr(canvas, "snap_to_grid", False) if canvas else False
+            grid_size = getattr(canvas, "grid_size", 20) if canvas else 20
+            target_set = getattr(canvas, "selected_widgets", {self})
+            if not target_set:
+                target_set = {self}
+
+            for w in target_set:
+                if w._drag_start_pos is None:
+                    continue
+                new_pos = w._drag_start_pos + delta
+                if snap:
+                    snapped_x = round(new_pos.x() / grid_size) * grid_size
+                    snapped_y = round(new_pos.y() / grid_size) * grid_size
+                else:
+                    snapped_x = new_pos.x()
+                    snapped_y = new_pos.y()
+
+                if canvas:
+                    snapped_x = max(0, min(snapped_x, canvas.width() - w.width()))
+                    snapped_y = max(0, min(snapped_y, canvas.height() - w.height()))
+                w.move(snapped_x, snapped_y)
         else:
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if self.edit_mode and event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_pos = None
-            parent = self.parent()
-            if parent and hasattr(parent, "snap_to_grid") and parent.snap_to_grid:
-                self.snap_to_grid(getattr(parent, "grid_size", 20))
+            canvas = self.parent()
+            grid_size = getattr(canvas, "grid_size", 20) if canvas else 20
+            target_set = getattr(canvas, "selected_widgets", {self})
+            if not target_set:
+                target_set = {self}
+            for w in target_set:
+                w._drag_start_pos = None
+                if getattr(canvas, "snap_to_grid", False):
+                    w.snap_to_grid(grid_size)
+            self._drag_start_mouse = None
         else:
             super().mouseReleaseEvent(event)
 
@@ -119,43 +273,85 @@ class DashboardWidget(QWidget):
             new_y = max(0, min(new_y, parent.height() - self.height()))
         self.move(new_x, new_y)
 
+        # Se snap_size estiver ativo na config, trava também largura e altura em múltiplos do snap
+        if isinstance(self.config, dict) and self.config.get("snap_size"):
+            if self.config.get("width") and self.config.get("height"):
+                target_w = max(grid_size, round(self.width() / grid_size) * grid_size)
+                target_h = max(grid_size, round(self.height() / grid_size) * grid_size)
+                self.setFixedSize(target_w, target_h)
+            elif self.config.get("width"):
+                target_w = max(grid_size, round(self.width() / grid_size) * grid_size)
+                self.setFixedWidth(target_w)
+
     def contextMenuEvent(self, event):
         if self.edit_mode:
+            canvas = self.parent()
+            selected = list(getattr(canvas, "selected_widgets", []))
             menu = QMenu(self)
             menu.setStyleSheet(
                 "QMenu { background-color: #202024; color: white; border: 1px solid #323238; }"
                 "QMenu::item { padding: 6px 24px; }"
                 "QMenu::item:selected { background-color: #3b82f6; }"
             )
-            action_edit = QAction("Editar Widget", self)
-            action_edit.triggered.connect(lambda: self.edit_callback(self) if self.edit_callback else None)
 
-            action_center = QAction("Centralizar na Horizontal", self)
-            action_center.triggered.connect(self.center_horizontally)
+            if len(selected) > 1 and self in selected:
+                # Ações em lote para múltiplos widgets selecionados
+                grid_size = getattr(canvas, "grid_size", 20)
+                action_snap_all = QAction(f"Alinhar Selecionados à Grade ({len(selected)} itens)", self)
+                action_snap_all.triggered.connect(lambda: [w.snap_to_grid(grid_size) for w in selected])
 
-            action_full_width = QAction("Ajustar à Largura da Tela (100%)", self)
-            action_full_width.triggered.connect(lambda: self.fit_to_width(20))
+                action_center_all = QAction(f"Centralizar Selecionados ({len(selected)} itens)", self)
+                action_center_all.triggered.connect(lambda: [w.center_horizontally() for w in selected])
 
-            action_snap = QAction("Alinhar à Grade", self)
-            action_snap.triggered.connect(lambda: self.snap_to_grid(20))
+                action_dup_all = QAction(f"Duplicar Selecionados ({len(selected)} itens)", self)
+                action_dup_all.triggered.connect(lambda: self._duplicate_group(selected))
 
-            action_dup = QAction("Duplicar Widget", self)
-            action_dup.triggered.connect(lambda: self.duplicate_callback(self) if self.duplicate_callback else None)
-            
-            action_del = QAction("Excluir Widget", self)
-            action_del.triggered.connect(self.deleteLater)
-            
-            menu.addAction(action_edit)
-            menu.addSeparator()
-            menu.addAction(action_center)
-            menu.addAction(action_full_width)
-            menu.addAction(action_snap)
-            menu.addSeparator()
-            menu.addAction(action_dup)
-            menu.addAction(action_del)
+                action_del_all = QAction(f"Excluir Selecionados ({len(selected)} itens)", self)
+                action_del_all.triggered.connect(lambda: [w.deleteLater() for w in selected])
+
+                menu.addAction(action_snap_all)
+                menu.addAction(action_center_all)
+                menu.addSeparator()
+                menu.addAction(action_dup_all)
+                menu.addAction(action_del_all)
+            else:
+                # Ações individuais
+                action_edit = QAction("Editar Widget", self)
+                action_edit.triggered.connect(lambda: self.edit_callback(self) if self.edit_callback else None)
+
+                action_center = QAction("Centralizar na Horizontal", self)
+                action_center.triggered.connect(self.center_horizontally)
+
+                action_full_width = QAction("Ajustar à Largura da Tela (100%)", self)
+                action_full_width.triggered.connect(lambda: self.fit_to_width(20))
+
+                grid_size = getattr(canvas, "grid_size", 20)
+                action_snap = QAction("Alinhar à Grade", self)
+                action_snap.triggered.connect(lambda: self.snap_to_grid(grid_size))
+
+                action_dup = QAction("Duplicar Widget", self)
+                action_dup.triggered.connect(lambda: self.duplicate_callback(self) if self.duplicate_callback else None)
+
+                action_del = QAction("Excluir Widget", self)
+                action_del.triggered.connect(self.deleteLater)
+
+                menu.addAction(action_edit)
+                menu.addSeparator()
+                menu.addAction(action_center)
+                menu.addAction(action_full_width)
+                menu.addAction(action_snap)
+                menu.addSeparator()
+                menu.addAction(action_dup)
+                menu.addAction(action_del)
+
             menu.exec(event.globalPos())
         else:
             super().contextMenuEvent(event)
+
+    def _duplicate_group(self, group):
+        for w in group:
+            if hasattr(w, "duplicate_callback") and w.duplicate_callback:
+                w.duplicate_callback(w)
 
 
 def normalize_can_id(val) -> int:
@@ -613,7 +809,15 @@ class ControllerWidget(DashboardWidget):
         
         self.btn = QPushButton(str(config.get("name", "Botão")))
         self.btn.setStyleSheet("background-color: #4e44dd; color: white; padding: 10px; border-radius: 4px; font-weight: bold;")
+        self.btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.btn)
+
+        w = config.get("width")
+        h = config.get("height")
+        if w and h:
+            self.setFixedSize(int(w), int(h))
+        elif w:
+            self.setFixedWidth(int(w))
         
         b = str(config.get("behavior", ""))
         if "Pulso (Apenas Click" in b:
@@ -1090,7 +1294,15 @@ class TerminalWidget(DashboardWidget):
 
     def _build_ui(self):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setMinimumSize(440, 240)
+        w = self.config.get("width")
+        h = self.config.get("height")
+        if w and h:
+            self.setFixedSize(max(160, int(w)), max(100, int(h)))
+        elif w:
+            self.setFixedWidth(max(160, int(w)))
+        else:
+            self.setMinimumSize(440, 240)
+
         self.setStyleSheet("""
             TerminalWidget {
                 background-color: #1a1a1e;
@@ -1237,6 +1449,80 @@ class TerminalWidget(DashboardWidget):
             self.txt_log.moveCursor(QTextCursor.MoveOperation.End)
 
 
+class ShapeWidget(DashboardWidget):
+    """Widget de forma geométrica livre (Linha, Retângulo / Quadrado, Círculo / Elipse)."""
+
+    def __init__(self, parent, config):
+        super().__init__(parent, config)
+        self.shape_type = str(config.get("shape_type", "rectangle"))
+        self.orientation = str(config.get("orientation", "horizontal"))
+        self.stroke_color = str(config.get("stroke_color", "#3b82f6"))
+        self.stroke_width = int(config.get("stroke_width", 2))
+        self.stroke_style = str(config.get("stroke_style", "solid"))
+        self.fill_color = str(config.get("fill_color", "transparent"))
+        self.corner_radius = int(config.get("corner_radius", 0))
+
+        w = int(config.get("width", 160))
+        h = int(config.get("height", 160 if self.shape_type != "line" else 20))
+        self.setFixedSize(max(4, w), max(4, h))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Configura caneta de contorno/linha
+        pen_color = QColor(self.stroke_color)
+        pen = QPen(pen_color, self.stroke_width)
+        if self.stroke_style == "dash":
+            pen.setStyle(Qt.PenStyle.DashLine)
+        elif self.stroke_style == "dot":
+            pen.setStyle(Qt.PenStyle.DotLine)
+        else:
+            pen.setStyle(Qt.PenStyle.SolidLine)
+        painter.setPen(pen)
+
+        # Configura preenchimento
+        if self.fill_color and self.fill_color != "transparent":
+            painter.setBrush(QBrush(QColor(self.fill_color)))
+        else:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        w = self.width()
+        h = self.height()
+        half_pen = self.stroke_width / 2.0
+
+        if self.shape_type == "line":
+            if self.orientation == "horizontal":
+                y = h / 2.0
+                painter.drawLine(int(half_pen), int(y), int(w - half_pen), int(y))
+            elif self.orientation == "vertical":
+                x = w / 2.0
+                painter.drawLine(int(x), int(half_pen), int(x), int(h - half_pen))
+            elif self.orientation == "diagonal_up":
+                painter.drawLine(int(half_pen), int(h - half_pen), int(w - half_pen), int(half_pen))
+            else:  # diagonal_down
+                painter.drawLine(int(half_pen), int(half_pen), int(w - half_pen), int(h - half_pen))
+
+        elif self.shape_type == "circle":
+            rect = QRect(
+                int(half_pen), int(half_pen),
+                max(2, int(w - self.stroke_width)), max(2, int(h - self.stroke_width))
+            )
+            painter.drawEllipse(rect)
+
+        else:  # rectangle / quadrado
+            rect = QRect(
+                int(half_pen), int(half_pen),
+                max(2, int(w - self.stroke_width)), max(2, int(h - self.stroke_width))
+            )
+            if self.corner_radius > 0:
+                painter.drawRoundedRect(rect, self.corner_radius, self.corner_radius)
+            else:
+                painter.drawRect(rect)
+
+        super().paintEvent(event)
+
+
 class WidgetsTab(QWidget):
     """Aba de painéis visuais (Dashboard)."""
 
@@ -1283,6 +1569,20 @@ class WidgetsTab(QWidget):
         self.btn_snap.toggled.connect(self.toggle_snap)
         self.btn_snap.hide()
 
+        # Seletor com 3 opções de Snap (10px, 20px, 40px)
+        self.cb_snap_size = QComboBox()
+        self.cb_snap_size.addItem("Snap: 10 px (Fino)", 10)
+        self.cb_snap_size.addItem("Snap: 20 px (Médio)", 20)
+        self.cb_snap_size.addItem("Snap: 40 px (Largo)", 40)
+        self.cb_snap_size.setCurrentIndex(1)  # 20 px default
+        self.cb_snap_size.setStyleSheet(
+            "QComboBox { background-color: #2e3035; color: white; padding: 5px 10px; border-radius: 4px; font-weight: bold; border: 1px solid #444; }"
+            "QComboBox::drop-down { border: none; width: 18px; }"
+            "QComboBox QAbstractItemView { background-color: #202024; color: white; selection-background-color: #3b82f6; }"
+        )
+        self.cb_snap_size.currentIndexChanged.connect(self._on_snap_size_changed)
+        self.cb_snap_size.hide()
+
         self.btn_center_all = QPushButton("Centralizar Todos")
         self.btn_center_all.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
         self.btn_center_all.setToolTip("Centraliza todos os widgets horizontalmente na tela")
@@ -1298,6 +1598,7 @@ class WidgetsTab(QWidget):
         toolbar.addWidget(self.btn_edit)
         toolbar.addWidget(self.btn_grid)
         toolbar.addWidget(self.btn_snap)
+        toolbar.addWidget(self.cb_snap_size)
         toolbar.addWidget(self.btn_center_all)
         toolbar.addWidget(self.btn_snap_all)
         toolbar.addStretch()
@@ -1311,6 +1612,12 @@ class WidgetsTab(QWidget):
         self.canvas.customContextMenuRequested.connect(self.show_canvas_context_menu)
         
         main_layout.addWidget(self.canvas, 1)
+
+    def _on_snap_size_changed(self, index: int):
+        size = self.cb_snap_size.currentData()
+        if size:
+            self.canvas.grid_size = size
+            self.canvas.update()
 
     def show_canvas_context_menu(self, pos):
         if not self.edit_mode:
@@ -1339,6 +1646,25 @@ class WidgetsTab(QWidget):
 
         action_terminal = QAction("Inserir Terminal CAN", self)
         action_terminal.triggered.connect(lambda: self.add_terminal(pos))
+
+        # Submenu de Formas Livres
+        menu_shapes = menu.addMenu("Inserir Forma Livre")
+        menu_shapes.setStyleSheet(
+            "QMenu { background-color: #202024; color: white; border: 1px solid #323238; }"
+            "QMenu::item:selected { background-color: #3b82f6; }"
+        )
+        action_shape_line = QAction("Linha", self)
+        action_shape_line.triggered.connect(lambda: self.add_shape(pos, "line"))
+
+        action_shape_rect = QAction("Retângulo / Quadrado", self)
+        action_shape_rect.triggered.connect(lambda: self.add_shape(pos, "rectangle"))
+
+        action_shape_circ = QAction("Círculo / Elipse", self)
+        action_shape_circ.triggered.connect(lambda: self.add_shape(pos, "circle"))
+
+        menu_shapes.addAction(action_shape_line)
+        menu_shapes.addAction(action_shape_rect)
+        menu_shapes.addAction(action_shape_circ)
         
         menu.addAction(action_label)
         menu.addAction(action_ind)
@@ -1347,6 +1673,7 @@ class WidgetsTab(QWidget):
         menu.addAction(action_inc_ctrl)
         menu.addAction(action_gauge)
         menu.addAction(action_terminal)
+        menu.addMenu(menu_shapes)
         
         menu.exec(self.canvas.mapToGlobal(pos))
 
@@ -1365,6 +1692,7 @@ class WidgetsTab(QWidget):
             self.btn_edit.setStyleSheet("background-color: #10b981; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
             self.btn_grid.show()
             self.btn_snap.show()
+            self.cb_snap_size.show()
             self.btn_center_all.show()
             self.btn_snap_all.show()
         else:
@@ -1373,8 +1701,10 @@ class WidgetsTab(QWidget):
             self.btn_grid.hide()
             self.btn_grid.setChecked(False)
             self.btn_snap.hide()
+            self.cb_snap_size.hide()
             self.btn_center_all.hide()
             self.btn_snap_all.hide()
+            self.canvas.clear_selection()
             
         for child in self.canvas.findChildren(DashboardWidget):
             child.set_edit_mode(checked)
@@ -1411,65 +1741,78 @@ class WidgetsTab(QWidget):
                 w.snap_to_grid(getattr(self.canvas, "grid_size", 20))
 
     def add_label(self, pos):
-        dlg = LabelDialog(self)
+        dlg = LabelDialog(self, grid_size=self.canvas.grid_size)
         if dlg.exec():
             cfg = dlg.get_config()
             w = LabelWidget(self.canvas, cfg)
             self._place_widget(w, pos)
 
     def add_indicator(self, pos):
-        dlg = IndicatorDialog(self)
+        dlg = IndicatorDialog(self, grid_size=self.canvas.grid_size)
         if dlg.exec():
             cfg = dlg.get_config()
             w = IndicatorWidget(self.canvas, cfg)
             self._place_widget(w, pos)
 
     def add_multi_indicator(self, pos):
-        dlg = MultiIndicatorDialog(self)
+        dlg = MultiIndicatorDialog(self, grid_size=self.canvas.grid_size)
         if dlg.exec():
             cfg = dlg.get_config()
             w = MultiIndicatorWidget(self.canvas, cfg)
             self._place_widget(w, pos)
 
     def add_controller(self, pos):
-        dlg = ControllerDialog(self)
+        dlg = ControllerDialog(self, grid_size=self.canvas.grid_size)
         if dlg.exec():
             cfg = dlg.get_config()
             w = ControllerWidget(self.canvas, cfg, self.can_thread)
             self._place_widget(w, pos)
 
     def add_incremental_controller(self, pos):
-        dlg = IncrementalControllerDialog(self)
+        dlg = IncrementalControllerDialog(self, grid_size=self.canvas.grid_size)
         if dlg.exec():
             cfg = dlg.get_config()
             w = IncrementalControllerWidget(self.canvas, cfg, self.can_thread)
             self._place_widget(w, pos)
 
     def add_gauge(self, pos):
-        dlg = GaugeDialog(self)
+        dlg = GaugeDialog(self, grid_size=self.canvas.grid_size)
         if dlg.exec():
             cfg = dlg.get_config()
             w = GaugeWidget(self.canvas, cfg)
             self._place_widget(w, pos)
 
     def add_terminal(self, pos):
-        dlg = TerminalDialog(self)
+        dlg = TerminalDialog(self, grid_size=self.canvas.grid_size)
         if dlg.exec():
             cfg = dlg.get_config()
             w = TerminalWidget(self.canvas, cfg)
             self._place_widget(w, pos)
 
+    def add_shape(self, pos, default_shape="rectangle"):
+        dlg = ShapeDialog(self, default_shape=default_shape, grid_size=self.canvas.grid_size)
+        if dlg.exec():
+            cfg = dlg.get_config()
+            w = ShapeWidget(self.canvas, cfg)
+            self._place_widget(w, pos)
+
     def _place_widget(self, w: DashboardWidget, pos):
         w.edit_callback = self._edit_widget
         w.duplicate_callback = self._duplicate_widget
-        if w.config and w.config.get("width"):
-            w.setFixedWidth(int(w.config["width"]))
+        if w.config:
+            if w.config.get("width") and w.config.get("height"):
+                w.setFixedSize(int(w.config["width"]), int(w.config["height"]))
+            elif w.config.get("width"):
+                w.setFixedWidth(int(w.config["width"]))
         w.show()
         w.move(pos)
         w.set_edit_mode(self.edit_mode)
+        if w.config and w.config.get("snap_size") and self.canvas.snap_to_grid:
+            w.snap_to_grid(self.canvas.grid_size)
         
     def clear_all(self):
         """Remove todos os widgets do canvas — usado pelo 'Novo Projeto'."""
+        self.canvas.clear_selection()
         for w in self.canvas.findChildren(DashboardWidget):
             w.setParent(None)
             w.deleteLater()
@@ -1480,33 +1823,38 @@ class WidgetsTab(QWidget):
         """Abre o diálogo de edição para o widget selecionado."""
         from src.widget_dialogs import (
             LabelDialog, IndicatorDialog, ControllerDialog, GaugeDialog, MultiIndicatorDialog,
-            IncrementalControllerDialog, TerminalDialog
+            IncrementalControllerDialog, TerminalDialog, ShapeDialog
         )
         wtype = widget.config.get("type", "")
         pos = widget.pos()
         saved_width = widget.config.get("width")
+        saved_height = widget.config.get("height")
 
         if wtype == "label":
-            dlg = LabelDialog(self, config=widget.config)
+            dlg = LabelDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         elif wtype == "indicator":
-            dlg = IndicatorDialog(self, config=widget.config)
+            dlg = IndicatorDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         elif wtype == "multi_indicator":
-            dlg = MultiIndicatorDialog(self, config=widget.config)
+            dlg = MultiIndicatorDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         elif wtype == "controller":
-            dlg = ControllerDialog(self, config=widget.config)
+            dlg = ControllerDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         elif wtype == "incremental_controller":
-            dlg = IncrementalControllerDialog(self, config=widget.config)
+            dlg = IncrementalControllerDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         elif wtype == "gauge":
-            dlg = GaugeDialog(self, config=widget.config)
+            dlg = GaugeDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         elif wtype == "terminal":
-            dlg = TerminalDialog(self, config=widget.config)
+            dlg = TerminalDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
+        elif wtype == "shape":
+            dlg = ShapeDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         else:
             return
 
         if dlg.exec():
             new_cfg = dlg.get_config()
-            if saved_width:
+            if saved_width and "width" not in new_cfg:
                 new_cfg["width"] = saved_width
+            if saved_height and "height" not in new_cfg:
+                new_cfg["height"] = saved_height
             widget.deleteLater()
             if wtype == "label":
                 new_w = LabelWidget(self.canvas, new_cfg)
@@ -1522,6 +1870,8 @@ class WidgetsTab(QWidget):
                 new_w = GaugeWidget(self.canvas, new_cfg)
             elif wtype == "terminal":
                 new_w = TerminalWidget(self.canvas, new_cfg)
+            elif wtype == "shape":
+                new_w = ShapeWidget(self.canvas, new_cfg)
             else:
                 return
             self._place_widget(new_w, pos)
@@ -1554,6 +1904,8 @@ class WidgetsTab(QWidget):
             new_w = GaugeWidget(self.canvas, new_cfg)
         elif wtype == "terminal":
             new_w = TerminalWidget(self.canvas, new_cfg)
+        elif wtype == "shape":
+            new_w = ShapeWidget(self.canvas, new_cfg)
         else:
             return
 
@@ -1565,13 +1917,14 @@ class WidgetsTab(QWidget):
             cfg = w.config.copy()
             cfg["pos_x"] = w.pos().x()
             cfg["pos_y"] = w.pos().y()
-            if w.config.get("width"):
-                cfg["width"] = w.config["width"]
+            cfg["width"] = w.width()
+            cfg["height"] = w.height()
             widgets_data.append(cfg)
         return widgets_data
 
     def import_data(self, widgets_data: list):
         """Restaura widgets no canvas a partir de uma lista de dicts exportados."""
+        self.canvas.clear_selection()
         for w in self.canvas.findChildren(DashboardWidget):
             w.setParent(None)
             w.deleteLater()
@@ -1592,6 +1945,8 @@ class WidgetsTab(QWidget):
                 widget = GaugeWidget(self.canvas, cfg)
             elif wtype == "terminal":
                 widget = TerminalWidget(self.canvas, cfg)
+            elif wtype == "shape":
+                widget = ShapeWidget(self.canvas, cfg)
             else:
                 continue
             self._place_widget(widget, pos)
@@ -1616,6 +1971,8 @@ class WidgetsTab(QWidget):
             widget = GaugeWidget(self.canvas, cfg)
         elif wtype == "terminal":
             widget = TerminalWidget(self.canvas, cfg)
+        elif wtype == "shape":
+            widget = ShapeWidget(self.canvas, cfg)
         else:
             return None
 
