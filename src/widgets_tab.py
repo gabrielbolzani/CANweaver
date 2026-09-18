@@ -37,9 +37,15 @@ class CanvasWidget(QFrame):
         self.snap_to_grid = True
         self.grid_size = 20
         self.selected_widgets: set[DashboardWidget] = set()
+        self.overlay: SelectionOverlay | None = None
         self._rubber_band: QRubberBand | None = None
         self._rubber_origin = QPoint()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "overlay", None):
+            self.overlay.setGeometry(self.rect())
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -70,6 +76,8 @@ class CanvasWidget(QFrame):
             w.set_selected(True)
         except (RuntimeError, ReferenceError):
             self.selected_widgets.discard(w)
+        if getattr(self, "overlay", None):
+            self.overlay.update()
 
     def deselect_widget(self, w: DashboardWidget):
         self.selected_widgets.discard(w)
@@ -78,6 +86,8 @@ class CanvasWidget(QFrame):
                 w.set_selected(False)
             except (RuntimeError, ReferenceError):
                 pass
+        if getattr(self, "overlay", None):
+            self.overlay.update()
 
     def clear_selection(self):
         self._clean_selected_widgets()
@@ -89,6 +99,8 @@ class CanvasWidget(QFrame):
                     w.set_selected(False)
                 except (RuntimeError, ReferenceError):
                     pass
+        if getattr(self, "overlay", None):
+            self.overlay.update()
 
     def select_all(self):
         self.clear_selection()
@@ -107,6 +119,8 @@ class CanvasWidget(QFrame):
                     w.deleteLater()
                 except (RuntimeError, ReferenceError):
                     pass
+        if getattr(self, "overlay", None):
+            self.overlay.update()
 
     def keyPressEvent(self, event):
         parent_tab = self.parent()
@@ -390,6 +404,18 @@ class DashboardWidget(QWidget):
                 target_w = max(grid_size, round(self.width() / grid_size) * grid_size)
                 self.setFixedWidth(target_w)
 
+    def apply_resized_geometry(self, new_geom: QRect):
+        """Aplica nova geometria (tamanho e posição) ao widget e atualiza suas configurações."""
+        if not is_widget_alive(self):
+            return
+        w = max(8, new_geom.width())
+        h = max(8, new_geom.height())
+        self.setFixedSize(w, h)
+        self.move(new_geom.topLeft())
+        if isinstance(self.config, dict):
+            self.config["width"] = w
+            self.config["height"] = h
+
     def _delete_self(self):
         canvas = self.parent()
         if canvas and hasattr(canvas, "selected_widgets"):
@@ -483,6 +509,395 @@ class DashboardWidget(QWidget):
             menu.exec(event.globalPos())
         else:
             super().contextMenuEvent(event)
+
+
+HANDLE_SIZE = 8
+
+HANDLE_CURSORS = {
+    "TL": Qt.CursorShape.SizeFDiagCursor,
+    "BR": Qt.CursorShape.SizeFDiagCursor,
+    "TR": Qt.CursorShape.SizeBDiagCursor,
+    "BL": Qt.CursorShape.SizeBDiagCursor,
+    "TM": Qt.CursorShape.SizeVerCursor,
+    "BM": Qt.CursorShape.SizeVerCursor,
+    "ML": Qt.CursorShape.SizeHorCursor,
+    "MR": Qt.CursorShape.SizeHorCursor,
+}
+
+
+def get_handles_for_rect(r: QRect, h_size: int = HANDLE_SIZE) -> dict[str, QRect]:
+    x, y, w, h = r.x(), r.y(), r.width(), r.height()
+    half = h_size // 2
+    return {
+        "TL": QRect(x - half, y - half, h_size, h_size),
+        "TM": QRect(x + w // 2 - half, y - half, h_size, h_size),
+        "TR": QRect(x + w - half, y - half, h_size, h_size),
+        "ML": QRect(x - half, y + h // 2 - half, h_size, h_size),
+        "MR": QRect(x + w - half, y + h // 2 - half, h_size, h_size),
+        "BL": QRect(x - half, y + h - half, h_size, h_size),
+        "BM": QRect(x + w // 2 - half, y + h - half, h_size, h_size),
+        "BR": QRect(x + w - half, y + h - half, h_size, h_size),
+    }
+
+
+def compute_resized_geometry(
+    orig_rect: QRect,
+    handle: str,
+    delta_x: int,
+    delta_y: int,
+    snap: bool = False,
+    grid_size: int = 20,
+    min_w: int = 16,
+    min_h: int = 16,
+    is_shift: bool = False,
+) -> QRect:
+    x1 = orig_rect.x()
+    y1 = orig_rect.y()
+    x2 = x1 + orig_rect.width()
+    y2 = y1 + orig_rect.height()
+
+    if "L" in handle:
+        new_x1 = x1 + delta_x
+        if snap:
+            new_x1 = round(new_x1 / grid_size) * grid_size
+        x1 = min(new_x1, x2 - min_w)
+    elif "R" in handle:
+        new_x2 = x2 + delta_x
+        if snap:
+            new_x2 = round(new_x2 / grid_size) * grid_size
+        x2 = max(new_x2, x1 + min_w)
+
+    if "T" in handle:
+        new_y1 = y1 + delta_y
+        if snap:
+            new_y1 = round(new_y1 / grid_size) * grid_size
+        y1 = min(new_y1, y2 - min_h)
+    elif "B" in handle:
+        new_y2 = y2 + delta_y
+        if snap:
+            new_y2 = round(new_y2 / grid_size) * grid_size
+        y2 = max(new_y2, y1 + min_h)
+
+    if is_shift and handle in ("TL", "TR", "BL", "BR"):
+        w = x2 - x1
+        h = y2 - y1
+        side = max(w, h)
+        if "L" in handle:
+            x1 = x2 - side
+        else:
+            x2 = x1 + side
+        if "T" in handle:
+            y1 = y2 - side
+        else:
+            y2 = y1 + side
+
+    return QRect(int(x1), int(y1), int(max(min_w, x2 - x1)), int(max(min_h, y2 - y1)))
+
+
+class SelectionOverlay(QWidget):
+    """
+    Camada transparente superior no Canvas para renderização de feedback visual de seleção,
+    caixa delimitadora vibrante e 8 alças interativas de redimensionamento idênticas ao MS Paint.
+    """
+    def __init__(self, parent_canvas: CanvasWidget):
+        super().__init__(parent_canvas)
+        self.canvas = parent_canvas
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        self._resizing_widget: DashboardWidget | None = None
+        self._resizing_handle: str | None = None
+        self._orig_rect: QRect | None = None
+        self._drag_start_mouse: QPoint | None = None
+
+        self._moving_widgets = False
+        self._drag_start_positions: dict[DashboardWidget, QPoint] = {}
+
+        self._rubber_origin: QPoint | None = None
+        self._rubber_current: QPoint | None = None
+        self._initial_selection: set[DashboardWidget] = set()
+
+    def _get_active_widget_for_handles(self) -> DashboardWidget | None:
+        if hasattr(self.canvas, "_clean_selected_widgets"):
+            self.canvas._clean_selected_widgets()
+        selected = [w for w in self.canvas.selected_widgets if is_widget_alive(w)]
+        if len(selected) == 1:
+            return selected[0]
+        return None
+
+    def _hit_test_handle(self, pos: QPoint) -> tuple[DashboardWidget | None, str | None]:
+        w = self._get_active_widget_for_handles()
+        if not w:
+            return None, None
+        handles = get_handles_for_rect(w.geometry(), HANDLE_SIZE)
+        for handle_id, rect in handles.items():
+            if rect.adjusted(-4, -4, 4, 4).contains(pos):
+                return w, handle_id
+        return None, None
+
+    def get_widget_at(self, pos: QPoint) -> DashboardWidget | None:
+        children = [
+            c for c in self.canvas.children()
+            if isinstance(c, DashboardWidget) and is_widget_alive(c) and c.isVisible()
+        ]
+        for c in reversed(children):
+            if c.geometry().contains(pos):
+                return c
+        return None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if hasattr(self.canvas, "_clean_selected_widgets"):
+            self.canvas._clean_selected_widgets()
+        selected_widgets = [w for w in self.canvas.selected_widgets if is_widget_alive(w)]
+
+        # 1. Caixa de seleção rubber-band (seleção por retângulo)
+        if self._rubber_origin and self._rubber_current:
+            rb_rect = QRect(self._rubber_origin, self._rubber_current).normalized()
+            painter.save()
+            painter.setPen(QPen(QColor("#38bdf8"), 1.5, Qt.PenStyle.DashLine))
+            painter.setBrush(QBrush(QColor(56, 189, 248, 35)))
+            painter.drawRect(rb_rect)
+            painter.restore()
+
+        if not selected_widgets:
+            return
+
+        # 2. Destaque vibrante e borda para todos os widgets selecionados
+        for w in selected_widgets:
+            geom = w.geometry()
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(59, 130, 246, 35)))
+            painter.drawRoundedRect(geom, 4, 4)
+
+            pen = QPen(QColor("#3b82f6"), 2, Qt.PenStyle.SolidLine)
+            pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(geom, 4, 4)
+            painter.restore()
+
+        # 3. 8 Alças de redimensionamento estilo Paint para o widget ativo
+        active_widget = self._get_active_widget_for_handles()
+        if active_widget:
+            handles = get_handles_for_rect(active_widget.geometry(), HANDLE_SIZE)
+            painter.save()
+            for handle_id, h_rect in handles.items():
+                painter.setBrush(QBrush(QColor("#ffffff")))
+                painter.setPen(QPen(QColor("#2563eb"), 1.5))
+                painter.drawRect(h_rect)
+            painter.restore()
+
+    def mousePressEvent(self, event):
+        pos = event.pos()
+        if event.button() == Qt.MouseButton.LeftButton:
+            is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+
+            # A. Clicou em uma das 8 alças de redimensionamento?
+            w, handle = self._hit_test_handle(pos)
+            if w and handle:
+                self._resizing_widget = w
+                self._resizing_handle = handle
+                self._orig_rect = w.geometry()
+                self._drag_start_mouse = pos
+                return
+
+            # B. Clicou em algum widget no Canvas?
+            clicked_widget = self.get_widget_at(pos)
+            if clicked_widget:
+                if is_ctrl:
+                    if clicked_widget in self.canvas.selected_widgets:
+                        self.canvas.deselect_widget(clicked_widget)
+                    else:
+                        self.canvas.select_widget(clicked_widget, add=True)
+                else:
+                    if clicked_widget not in self.canvas.selected_widgets:
+                        self.canvas.clear_selection()
+                        self.canvas.select_widget(clicked_widget, add=False)
+
+                # Inicia arrasto em bloco de todos os selecionados
+                self._moving_widgets = True
+                self._drag_start_mouse = pos
+                self._drag_start_positions = {
+                    item: item.pos() for item in self.canvas.selected_widgets if is_widget_alive(item)
+                }
+                for item in self.canvas.selected_widgets:
+                    if is_widget_alive(item):
+                        item.raise_()
+                self.raise_()
+                self.update()
+                return
+
+            # C. Clicou no espaço vazio do Canvas -> inicia seleção rubber-band
+            if not is_ctrl:
+                self.canvas.clear_selection()
+            self._rubber_origin = pos
+            self._rubber_current = pos
+            self._initial_selection = set(self.canvas.selected_widgets)
+            self.update()
+
+        elif event.button() == Qt.MouseButton.RightButton:
+            clicked_widget = self.get_widget_at(pos)
+            if clicked_widget:
+                if clicked_widget not in self.canvas.selected_widgets:
+                    self.canvas.clear_selection()
+                    self.canvas.select_widget(clicked_widget, add=False)
+                    self.update()
+                clicked_widget.contextMenuEvent(event)
+            else:
+                self.canvas.customContextMenuRequested.emit(pos)
+
+    def mouseMoveEvent(self, event):
+        pos = event.pos()
+
+        # 1. Redimensionamento em andamento
+        if self._resizing_widget and self._resizing_handle and self._orig_rect and self._drag_start_mouse:
+            if not is_widget_alive(self._resizing_widget):
+                self._resizing_widget = None
+                self._resizing_handle = None
+                return
+            delta = pos - self._drag_start_mouse
+            snap = getattr(self.canvas, "snap_to_grid", False)
+            grid_size = getattr(self.canvas, "grid_size", 20)
+            is_shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            min_w = 8 if getattr(self._resizing_widget, "shape_type", None) == "line" else 16
+            min_h = 8 if getattr(self._resizing_widget, "shape_type", None) == "line" else 16
+
+            new_rect = compute_resized_geometry(
+                self._orig_rect, self._resizing_handle, delta.x(), delta.y(),
+                snap=snap, grid_size=grid_size, min_w=min_w, min_h=min_h, is_shift=is_shift
+            )
+            self._resizing_widget.apply_resized_geometry(new_rect)
+            self.update()
+            return
+
+        # 2. Movimentação de widgets selecionados em andamento
+        if self._moving_widgets and self._drag_start_mouse:
+            delta = pos - self._drag_start_mouse
+            snap = getattr(self.canvas, "snap_to_grid", False)
+            grid_size = getattr(self.canvas, "grid_size", 20)
+
+            for w, start_pos in self._drag_start_positions.items():
+                if not is_widget_alive(w):
+                    continue
+                new_pos = start_pos + delta
+                if snap:
+                    snapped_x = round(new_pos.x() / grid_size) * grid_size
+                    snapped_y = round(new_pos.y() / grid_size) * grid_size
+                else:
+                    snapped_x = new_pos.x()
+                    snapped_y = new_pos.y()
+                snapped_x = max(0, min(snapped_x, self.canvas.width() - w.width()))
+                snapped_y = max(0, min(snapped_y, self.canvas.height() - w.height()))
+                w.move(snapped_x, snapped_y)
+            self.update()
+            return
+
+        # 3. Rubber-band (seleção por arrasto) em andamento
+        if self._rubber_origin:
+            self._rubber_current = pos
+            rect = QRect(self._rubber_origin, pos).normalized()
+            is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            if hasattr(self.canvas, "_clean_selected_widgets"):
+                self.canvas._clean_selected_widgets()
+            for w in self.canvas.findChildren(DashboardWidget):
+                if not is_widget_alive(w):
+                    continue
+                if w.geometry().intersects(rect):
+                    w.set_selected(True)
+                    self.canvas.selected_widgets.add(w)
+                elif not is_ctrl and w not in self._initial_selection:
+                    w.set_selected(False)
+                    self.canvas.selected_widgets.discard(w)
+            self.update()
+            return
+
+        # 4. Estado de hover e alteração de cursores do mouse
+        w, handle = self._hit_test_handle(pos)
+        if handle and handle in HANDLE_CURSORS:
+            self.setCursor(HANDLE_CURSORS[handle])
+            return
+
+        widget_under_mouse = self.get_widget_at(pos)
+        if widget_under_mouse:
+            if widget_under_mouse in self.canvas.selected_widgets:
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            else:
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+            return
+
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._resizing_widget:
+                if is_widget_alive(self._resizing_widget):
+                    grid_size = getattr(self.canvas, "grid_size", 20)
+                    if getattr(self.canvas, "snap_to_grid", False) and hasattr(self._resizing_widget, "snap_to_grid"):
+                        self._resizing_widget.snap_to_grid(grid_size)
+                self._resizing_widget = None
+                self._resizing_handle = None
+                self._orig_rect = None
+                self._drag_start_mouse = None
+                self.update()
+                return
+
+            if self._moving_widgets:
+                grid_size = getattr(self.canvas, "grid_size", 20)
+                snap = getattr(self.canvas, "snap_to_grid", False)
+                for item in list(self._drag_start_positions.keys()):
+                    if is_widget_alive(item) and snap and hasattr(item, "snap_to_grid"):
+                        item.snap_to_grid(grid_size)
+                self._moving_widgets = False
+                self._drag_start_positions.clear()
+                self._drag_start_mouse = None
+                self.update()
+                return
+
+            if self._rubber_origin and self._rubber_current:
+                rect = QRect(self._rubber_origin, self._rubber_current).normalized()
+                if rect.width() > 4 and rect.height() > 4:
+                    is_ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                    if not is_ctrl:
+                        self.canvas.clear_selection()
+                    for w in self.canvas.findChildren(DashboardWidget):
+                        if is_widget_alive(w) and w.geometry().intersects(rect):
+                            self.canvas.select_widget(w, add=True)
+                self._rubber_origin = None
+                self._rubber_current = None
+                self._initial_selection.clear()
+                self.update()
+                return
+
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            clicked_widget = self.get_widget_at(event.pos())
+            if clicked_widget and hasattr(clicked_widget, "edit_callback") and clicked_widget.edit_callback:
+                clicked_widget.edit_callback(clicked_widget)
+                return
+        super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event):
+        pos = event.pos()
+        clicked_widget = self.get_widget_at(pos)
+        if clicked_widget:
+            if clicked_widget not in self.canvas.selected_widgets:
+                self.canvas.clear_selection()
+                self.canvas.select_widget(clicked_widget, add=False)
+                self.update()
+            clicked_widget.contextMenuEvent(event)
+        else:
+            self.canvas.customContextMenuRequested.emit(pos)
+
+    def keyPressEvent(self, event):
+        self.canvas.keyPressEvent(event)
 
 
 def normalize_can_id(val) -> int:
@@ -722,6 +1137,15 @@ class GaugeWidget(DashboardWidget):
             self.setFixedSize(size, max(60, size // 3) + 30)
         else:
             self.setFixedSize(size, size + 30)
+
+    def apply_resized_geometry(self, new_geom: QRect):
+        super().apply_resized_geometry(new_geom)
+        style = self.config.get("style", "Arco")
+        if style == "Barra Horizontal":
+            self.config["gauge_size"] = max(40, self.width())
+        else:
+            self.config["gauge_size"] = max(40, min(self.width(), self.height() - 30))
+        self.update()
 
     def _get_conv_value(self):
         v_min = self.config["val_min_raw"]
@@ -1597,6 +2021,17 @@ class ShapeWidget(DashboardWidget):
         h = int(config.get("height", 160 if self.shape_type != "line" else 20))
         self.setFixedSize(max(4, w), max(4, h))
 
+    def apply_resized_geometry(self, new_geom: QRect):
+        min_dim = 4 if self.shape_type == "line" else 8
+        w = max(min_dim, new_geom.width())
+        h = max(min_dim, new_geom.height())
+        self.setFixedSize(w, h)
+        self.move(new_geom.topLeft())
+        if isinstance(self.config, dict):
+            self.config["width"] = w
+            self.config["height"] = h
+        self.update()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -1741,6 +2176,8 @@ class WidgetsTab(QWidget):
         self.canvas.setStyleSheet("background-color: #1a1a1e; border: 1px solid #323238; border-radius: 8px;")
         self.canvas.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.canvas.customContextMenuRequested.connect(self.show_canvas_context_menu)
+        self.canvas.overlay = SelectionOverlay(self.canvas)
+        self.canvas.overlay.hide()
         
         main_layout.addWidget(self.canvas, 1)
 
@@ -1826,6 +2263,11 @@ class WidgetsTab(QWidget):
             self.cb_snap_size.show()
             self.btn_center_all.show()
             self.btn_snap_all.show()
+            if getattr(self.canvas, "overlay", None):
+                self.canvas.overlay.setGeometry(self.canvas.rect())
+                self.canvas.overlay.show()
+                self.canvas.overlay.raise_()
+                self.canvas.overlay.update()
         else:
             self.btn_edit.setText("Layout Travado")
             self.btn_edit.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
@@ -1836,6 +2278,8 @@ class WidgetsTab(QWidget):
             self.btn_center_all.hide()
             self.btn_snap_all.hide()
             self.canvas.clear_selection()
+            if getattr(self.canvas, "overlay", None):
+                self.canvas.overlay.hide()
             
         for child in self.canvas.findChildren(DashboardWidget):
             if is_widget_alive(child):
@@ -1941,6 +2385,10 @@ class WidgetsTab(QWidget):
         w.set_edit_mode(self.edit_mode)
         if w.config and w.config.get("snap_size") and self.canvas.snap_to_grid:
             w.snap_to_grid(self.canvas.grid_size)
+        if getattr(self.canvas, "overlay", None) and self.edit_mode:
+            self.canvas.overlay.raise_()
+            self.canvas.select_widget(w, add=False)
+            self.canvas.overlay.update()
         
     def clear_all(self):
         """Remove todos os widgets do canvas — usado pelo 'Novo Projeto'."""
