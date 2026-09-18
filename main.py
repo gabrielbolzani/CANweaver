@@ -135,8 +135,22 @@ class MainWindow(QMainWindow):
         self.record_start_time = 0
         self.temp_record_filename = os.path.join(BASE_DIR, "temp_gravacao.csv")
 
+        # Workspace de Documentos do Projeto (armazenado isoladamente em ~/.canweaver/project_docs)
+        self.project_docs_dir = os.path.join(os.path.expanduser("~"), ".canweaver", "project_docs")
+        os.makedirs(self.project_docs_dir, exist_ok=True)
+
+        # Migração única se houver anotações legadas na pasta do repositório
+        old_main_md = os.path.join(BASE_DIR, "CANweaver_Projeto.md")
+        new_main_md = os.path.join(self.project_docs_dir, "CANweaver_Projeto.md")
+        if not os.path.exists(new_main_md) and os.path.exists(old_main_md):
+            try:
+                import shutil
+                shutil.copy2(old_main_md, new_main_md)
+            except Exception:
+                pass
+
         # Anotações
-        self.annotation_manager = AnnotationManager(BASE_DIR)
+        self.annotation_manager = AnnotationManager(self.project_docs_dir)
         self.annotation_manager.load()
 
         # Thread CAN (começa ociosa)
@@ -148,7 +162,7 @@ class MainWindow(QMainWindow):
         self.transmit_tab = TransmitTab(self.can_thread)
         self.widgets_tab = WidgetsTab(self.can_thread)
         self.error_tab = ErrorTab()
-        self.docs_tab = DocsTab(BASE_DIR, self.annotation_manager, parent=self)
+        self.docs_tab = DocsTab(self.project_docs_dir, self.annotation_manager, parent=self)
 
         # CAN Copilot (Assistente IA)
         self.copilot_panel = CANCopilotPanel(self.can_thread, self.annotation_manager, self)
@@ -504,6 +518,15 @@ class MainWindow(QMainWindow):
         self.transmit_tab.clear_all()
         self.widgets_tab.clear_all()
 
+        # Limpa documentos extras do projeto anterior no workspace
+        if os.path.isdir(self.project_docs_dir):
+            for fname in os.listdir(self.project_docs_dir):
+                if fname.lower().endswith(".md") and fname != "CANweaver_Projeto.md":
+                    try:
+                        os.remove(os.path.join(self.project_docs_dir, fname))
+                    except Exception:
+                        pass
+
         # Apaga anotações da memória e do arquivo
         self.annotation_manager.clear()
         if hasattr(self, "docs_tab"):
@@ -572,10 +595,24 @@ class MainWindow(QMainWindow):
         """Coleta os dados de todas as abas para montar o pacote."""
         import json
         data = {}
-        md_path = os.path.join(BASE_DIR, "CANweaver_Projeto.md")
-        if os.path.exists(md_path):
-            with open(md_path, "r", encoding="utf-8") as f:
+        if hasattr(self, "annotation_manager") and os.path.exists(self.annotation_manager.filename):
+            with open(self.annotation_manager.filename, "r", encoding="utf-8") as f:
                 data["annotations_md"] = f.read()
+
+        # Coleta documentos adicionais (.md) pertencentes a este projeto
+        extra_docs = {}
+        if hasattr(self, "project_docs_dir") and os.path.isdir(self.project_docs_dir):
+            for fname in os.listdir(self.project_docs_dir):
+                if fname.lower().endswith(".md") and fname != "CANweaver_Projeto.md":
+                    fpath = os.path.join(self.project_docs_dir, fname)
+                    if os.path.isfile(fpath):
+                        try:
+                            with open(fpath, "r", encoding="utf-8") as f:
+                                extra_docs[fname] = f.read()
+                        except Exception:
+                            pass
+        data["extra_docs"] = extra_docs
+
         data["transmit_tasks"] = self.transmit_tab.export_data()
         data["dashboard_layout"] = self.widgets_tab.export_data()
         return data
@@ -604,8 +641,12 @@ class MainWindow(QMainWindow):
 
         # Múltiplos itens — ZIP
         with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            if selection.get("annotations") and "annotations_md" in full_data:
-                zipf.writestr("CANweaver_Projeto.md", full_data["annotations_md"])
+            if selection.get("annotations"):
+                if "annotations_md" in full_data:
+                    zipf.writestr("CANweaver_Projeto.md", full_data["annotations_md"])
+                if "extra_docs" in full_data:
+                    for doc_name, doc_content in full_data["extra_docs"].items():
+                        zipf.writestr(f"docs/{doc_name}", doc_content)
             if selection.get("transmit"):
                 zipf.writestr("transmit_tasks.json",
                               json.dumps(full_data["transmit_tasks"], indent=4))
@@ -714,15 +755,33 @@ class MainWindow(QMainWindow):
                     )
                     return
 
+                # Limpa documentos extras de projetos anteriores do workspace
+                if os.path.isdir(self.project_docs_dir):
+                    for fname in os.listdir(self.project_docs_dir):
+                        if fname.lower().endswith(".md") and fname != "CANweaver_Projeto.md":
+                            try:
+                                os.remove(os.path.join(self.project_docs_dir, fname))
+                            except Exception:
+                                pass
+
                 if "CANweaver_Projeto.md" in names:
                     md_content = zipf.read("CANweaver_Projeto.md").decode("utf-8")
-                    md_path = os.path.join(BASE_DIR, "CANweaver_Projeto.md")
-                    with open(md_path, "w", encoding="utf-8") as f:
+                    with open(self.annotation_manager.filename, "w", encoding="utf-8") as f:
                         f.write(md_content)
                     self.annotation_manager.load()
                     if hasattr(self, "docs_tab"):
-                        self.docs_tab.refresh_files()
                         self.docs_tab.reload_file_if_open("CANweaver_Projeto.md")
+
+                # Extrai outros documentos .md do projeto contidos no pacote ZIP
+                for name in names:
+                    if name.lower().endswith(".md") and os.path.basename(name) != "CANweaver_Projeto.md":
+                        bname = os.path.basename(name)
+                        doc_content = zipf.read(name).decode("utf-8")
+                        target_path = os.path.join(self.project_docs_dir, bname)
+                        with open(target_path, "w", encoding="utf-8") as f:
+                            f.write(doc_content)
+                if hasattr(self, "docs_tab"):
+                    self.docs_tab.refresh_files()
 
                 if "transmit_tasks.json" in names:
                     tasks = json.loads(zipf.read("transmit_tasks.json").decode("utf-8"))

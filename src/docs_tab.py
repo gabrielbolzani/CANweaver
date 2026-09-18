@@ -61,6 +61,12 @@ class MarkdownEditor(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
+IGNORED_REPO_MD_NAMES = {
+    "readme.md", "readme.pt-br.md", "license.md", "contributing.md",
+    "walkthrough.md", "implementation_plan.md", "changelog.md", "code_of_conduct.md"
+}
+
+
 class DocsTab(QWidget):
     """Aba principal de gerenciamento, edição e visualização de documentos Markdown."""
 
@@ -470,7 +476,7 @@ class DocsTab(QWidget):
     # Gerenciamento e Varredura de Arquivos
     # ------------------------------------------------------------------
     def refresh_files(self):
-        """Varre o diretório do projeto e pastas docs/ em busca de arquivos .md."""
+        """Varre o diretório do projeto em busca de arquivos .md (exclui docs do repositório/código)."""
         current_selection = self.current_file_path
 
         md_files = []
@@ -480,32 +486,38 @@ class DocsTab(QWidget):
         if os.path.exists(main_project_md):
             md_files.append(main_project_md)
 
-        # 2. Outros arquivos .md na raiz
+        # 2. Outros arquivos .md na pasta de documentos do projeto
         try:
             for fname in sorted(os.listdir(self.project_dir)):
                 if fname.lower().endswith(".md") and fname != "CANweaver_Projeto.md":
+                    if fname.lower() in IGNORED_REPO_MD_NAMES:
+                        continue
                     fpath = os.path.join(self.project_dir, fname)
                     if os.path.isfile(fpath) and fpath not in md_files:
                         md_files.append(fpath)
         except Exception:
             pass
 
-        # 3. Subpasta docs/ se existir
+        # 3. Subpasta docs/ se existir dentro do projeto
         docs_sub = os.path.join(self.project_dir, "docs")
         if os.path.isdir(docs_sub):
             try:
                 for fname in sorted(os.listdir(docs_sub)):
                     if fname.lower().endswith(".md"):
+                        if fname.lower() in IGNORED_REPO_MD_NAMES:
+                            continue
                         fpath = os.path.join(docs_sub, fname)
                         if os.path.isfile(fpath) and fpath not in md_files:
                             md_files.append(fpath)
             except Exception:
                 pass
 
-        # 4. Inclui arquivos externos abertos previamente
+        # 4. Inclui arquivos externos abertos previamente (exceto docs do repositório)
         for ext_file in self.tracked_files:
             if ext_file not in md_files and os.path.isfile(ext_file):
-                md_files.append(ext_file)
+                bname = os.path.basename(ext_file).lower()
+                if bname not in IGNORED_REPO_MD_NAMES:
+                    md_files.append(ext_file)
 
         self.tracked_files = md_files
 
