@@ -100,9 +100,17 @@ CANweaver/
 - **Edite aqui** se precisar mudar: transmissão, periodicidade, UI da aba Transmitir
 
 ### `src/widgets_tab.py` — `WidgetsTab(QWidget)`
-- Esqueleto para a aba "Widgets" (em desenvolvimento)
-- Recebe `can_thread_ref` para futura conexão com dados ao vivo
-- **Edite aqui** para adicionar gauges, velocímetros, painéis
+- Painel de instrumentos e dashboard visual
+- Suporte a arrastar, redimensionar, alinhar à grade (snap) e multi-seleção de widgets
+- Suporta widgets nativos (gauges, controladores, indicadores) e widgets customizados em Python (`CustomPythonDashboardWidget`)
+
+### `src/custom_widget_api.py` — API de Widgets Customizados em Python
+- `CustomWidgetBase(QWidget)`: classe base para criação de widgets pelo usuário
+  - `send_can(can_id, payload)`: envio de mensagens para o barramento
+  - `on_can_frame(can_id, freq, payload)`: hook para recepção de frames
+  - `init_ui()`: montagem de interface gráfica com PyQt6
+  - `get_custom_config()` e `set_custom_config()`: persistência no arquivo de projeto
+- Diretório `custom_widgets/`: plugins e scripts do usuário (ex: `widget_template.py`, `obd2_widget.py`)
 
 ---
 

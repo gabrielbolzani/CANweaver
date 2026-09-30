@@ -7,16 +7,26 @@ from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, QSize
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QMenu, QProgressBar, QSlider, QSpinBox, QLineEdit, QPlainTextEdit,
-    QRubberBand, QComboBox, QSizePolicy
+    QRubberBand, QComboBox, QSizePolicy, QFileDialog, QMessageBox
 )
 from PyQt6.QtGui import QAction, QColor, QPainter, QPen, QBrush, QFont, QTextCursor, QCursor
 from PyQt6 import sip
 import math
+import os
+import sys
+import traceback
 
 from src.widget_dialogs import (
     LabelDialog, IndicatorDialog, ControllerDialog, GaugeDialog, MultiIndicatorDialog,
-    IncrementalControllerDialog, TerminalDialog, ShapeDialog
+    IncrementalControllerDialog, TerminalDialog, ShapeDialog, CustomPythonDialog
 )
+from src.custom_widget_api import (
+    CustomWidgetBase,
+    load_custom_widget_class_from_file,
+    list_available_custom_widgets,
+    get_custom_widgets_directory
+)
+
 
 
 def is_widget_alive(w) -> bool:
@@ -2167,6 +2177,141 @@ class ShapeWidget(DashboardWidget):
                 painter.drawRect(rect)
 
         super().paintEvent(event)
+ 
+ 
+class CustomPythonDashboardWidget(DashboardWidget):
+    """
+    DashboardWidget especializado que incorpora e executa um CustomWidgetBase escrito em Python.
+    Fornece barramento CAN (envio e recebimento), redimensionamento, persistência e isolamento de erros.
+    """
+    def __init__(self, parent, config, can_thread=None):
+        super().__init__(parent, config)
+        self._can_thread = can_thread
+        self.script_path = self.config.get("script_path", "")
+        self.custom_widget: CustomWidgetBase | None = None
+        self._error_msg: str | None = None
+
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
+
+        self.load_script()
+
+    @property
+    def can_thread(self):
+        parent = self.parent()
+        while parent is not None:
+            if hasattr(parent, "can_thread") and parent.can_thread is not None:
+                return parent.can_thread
+            parent = parent.parent()
+        return self._can_thread
+
+    def send_can_from_child(self, can_id: int, payload: list[int] | bytes) -> bool:
+        """Chamado pelo widget customizado via self.send_can()."""
+        worker = self.can_thread
+        if not worker or getattr(worker, "mode", "IDLE") == "IDLE":
+            return False
+        try:
+            worker.send_message(int(can_id), list(payload))
+            return True
+        except Exception:
+            return False
+
+    def load_script(self):
+        """Carrega ou recarrega o arquivo Python do widget."""
+        if self.custom_widget is not None:
+            try:
+                self.custom_widget.on_close()
+            except Exception:
+                pass
+            try:
+                self._layout.removeWidget(self.custom_widget)
+                self.custom_widget.deleteLater()
+            except Exception:
+                pass
+            self.custom_widget = None
+
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        if not self.script_path or not os.path.exists(self.script_path):
+            self._error_msg = f"Arquivo do script não encontrado:\n{self.script_path}"
+            self._build_error_ui()
+            return
+
+        widget_cls, err = load_custom_widget_class_from_file(self.script_path)
+        if err or widget_cls is None:
+            self._error_msg = err or "Erro ao carregar classe do widget."
+            self._build_error_ui()
+            return
+
+        try:
+            self.custom_widget = widget_cls(self)
+            self.custom_widget.set_wrapper(self)
+            self._layout.addWidget(self.custom_widget)
+            self._error_msg = None
+
+            # Dimensões salvas ou padrão da classe
+            default_w, default_h = getattr(widget_cls, "DEFAULT_SIZE", (280, 200))
+            w = self.config.get("width", default_w)
+            h = self.config.get("height", default_h)
+            self.resize(int(w), int(h))
+
+            # Restaura configurações personalizadas
+            custom_cfg = self.config.get("custom_config")
+            if custom_cfg and isinstance(custom_cfg, dict):
+                try:
+                    self.custom_widget.set_custom_config(custom_cfg)
+                except Exception:
+                    pass
+
+        except Exception:
+            self._error_msg = f"Exceção ao instanciar widget:\n{traceback.format_exc()}"
+            self._build_error_ui()
+
+    def _build_error_ui(self):
+        err_frame = QFrame(self)
+        err_frame.setStyleSheet(
+            "QFrame { background-color: #27272a; border: 2px solid #ef4444; border-radius: 6px; padding: 8px; }"
+        )
+        l = QVBoxLayout(err_frame)
+        l.setSpacing(6)
+
+        lbl_err = QLabel("⚠️ Erro no Widget Python", err_frame)
+        lbl_err.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 12px;")
+        l.addWidget(lbl_err)
+
+        lbl_desc = QLabel(self._error_msg or "Erro ao carregar script", err_frame)
+        lbl_desc.setStyleSheet("color: #d4d4d8; font-size: 10px; font-family: monospace;")
+        lbl_desc.setWordWrap(True)
+        l.addWidget(lbl_desc)
+
+        btn_retry = QPushButton("Tentar Novamente (Recarregar)", err_frame)
+        btn_retry.setStyleSheet("background-color: #3b82f6; color: white; padding: 5px 10px; border-radius: 4px; font-weight: bold;")
+        btn_retry.clicked.connect(self.load_script)
+        l.addWidget(btn_retry)
+
+        self._layout.addWidget(err_frame)
+        self.resize(max(self.width(), 260), max(self.height(), 160))
+
+    def process_can_frame(self, can_id: int, freq: float, payload: list):
+        """Encaminha o frame CAN para o método on_can_frame do widget do usuário com proteção contra exceções."""
+        if self.custom_widget is not None and hasattr(self.custom_widget, "on_can_frame"):
+            try:
+                self.custom_widget.on_can_frame(can_id, freq, payload)
+            except Exception:
+                pass
+
+    def deleteLater(self):
+        if self.custom_widget is not None and hasattr(self.custom_widget, "on_close"):
+            try:
+                self.custom_widget.on_close()
+            except Exception:
+                pass
+        super().deleteLater()
 
 
 class WidgetsTab(QWidget):
@@ -2313,6 +2458,38 @@ class WidgetsTab(QWidget):
         menu_shapes.addAction(action_shape_line)
         menu_shapes.addAction(action_shape_rect)
         menu_shapes.addAction(action_shape_circ)
+
+        # Submenu de Widgets Customizados em Python
+        menu_python = menu.addMenu("🐍 Inserir Widget Python (.py)")
+        menu_python.setStyleSheet(
+            "QMenu { background-color: #202024; color: white; border: 1px solid #323238; }"
+            "QMenu::item:selected { background-color: #3b82f6; }"
+        )
+
+        available_widgets = list_available_custom_widgets()
+        has_items = False
+        for w_info in available_widgets:
+            has_items = True
+            if w_info.get("class"):
+                act = QAction(f"{w_info['name']} ({w_info['file_name']})", self)
+                fpath = w_info["file_path"]
+                act.triggered.connect(lambda checked, p=pos, f=fpath: self.add_custom_python_widget(p, f))
+                menu_python.addAction(act)
+            else:
+                act = QAction(f"{w_info['name']} (⚠️ Erro no script)", self)
+                act.setEnabled(False)
+                menu_python.addAction(act)
+
+        if has_items:
+            menu_python.addSeparator()
+
+        action_load_external = QAction("Carregar Arquivo .py Externo...", self)
+        action_load_external.triggered.connect(lambda: self.add_custom_python_widget(pos, None))
+        menu_python.addAction(action_load_external)
+
+        action_open_folder = QAction("Abrir Pasta 'custom_widgets'...", self)
+        action_open_folder.triggered.connect(self._open_custom_widgets_folder)
+        menu_python.addAction(action_open_folder)
         
         menu.addAction(action_label)
         menu.addAction(action_ind)
@@ -2322,6 +2499,7 @@ class WidgetsTab(QWidget):
         menu.addAction(action_gauge)
         menu.addAction(action_terminal)
         menu.addMenu(menu_shapes)
+        menu.addMenu(menu_python)
         
         menu.exec(self.canvas.mapToGlobal(pos))
 
@@ -2452,6 +2630,34 @@ class WidgetsTab(QWidget):
             w = ShapeWidget(self.canvas, cfg)
             self._place_widget(w, pos)
 
+    def add_custom_python_widget(self, pos, script_path=None):
+        """Instancia um widget customizado desenvolvido em Python."""
+        if not script_path:
+            start_dir = get_custom_widgets_directory()
+            fn, _ = QFileDialog.getOpenFileName(
+                self, "Selecionar Widget Python", start_dir, "Arquivos Python (*.py)"
+            )
+            if not fn:
+                return
+            script_path = fn
+
+        cfg = {
+            "type": "custom_python",
+            "script_path": script_path,
+            "snap_size": True
+        }
+        w = CustomPythonDashboardWidget(self.canvas, cfg, self.can_thread)
+        self._place_widget(w, pos)
+
+    def _open_custom_widgets_folder(self):
+        """Abre a pasta custom_widgets no gerenciador de arquivos do sistema."""
+        folder = get_custom_widgets_directory()
+        if os.path.exists(folder):
+            try:
+                os.startfile(folder)
+            except Exception:
+                pass
+
     def _place_widget(self, w: DashboardWidget, pos):
         w.edit_callback = self._edit_widget
         w.duplicate_callback = self._duplicate_widget
@@ -2512,11 +2718,19 @@ class WidgetsTab(QWidget):
             dlg = TerminalDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         elif wtype == "shape":
             dlg = ShapeDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
+        elif wtype == "custom_python":
+            dlg = CustomPythonDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         else:
             return
 
         if dlg.exec():
             new_cfg = dlg.get_config()
+            if wtype == "custom_python" and getattr(dlg, "reload_requested", False):
+                widget.script_path = new_cfg.get("script_path", widget.script_path)
+                widget.config.update(new_cfg)
+                widget.load_script()
+                return
+
             if saved_width and "width" not in new_cfg:
                 new_cfg["width"] = saved_width
             if saved_height and "height" not in new_cfg:
@@ -2545,6 +2759,8 @@ class WidgetsTab(QWidget):
                 new_w = TerminalWidget(self.canvas, new_cfg)
             elif wtype == "shape":
                 new_w = ShapeWidget(self.canvas, new_cfg)
+            elif wtype == "custom_python":
+                new_w = CustomPythonDashboardWidget(self.canvas, new_cfg, self.can_thread)
             else:
                 return
             self._place_widget(new_w, pos)
@@ -2579,6 +2795,8 @@ class WidgetsTab(QWidget):
             new_w = TerminalWidget(self.canvas, new_cfg)
         elif wtype == "shape":
             new_w = ShapeWidget(self.canvas, new_cfg)
+        elif wtype == "custom_python":
+            new_w = CustomPythonDashboardWidget(self.canvas, new_cfg, self.can_thread)
         else:
             return
 
@@ -2593,6 +2811,11 @@ class WidgetsTab(QWidget):
                 cfg["pos_y"] = w.pos().y()
                 cfg["width"] = w.width()
                 cfg["height"] = w.height()
+                if isinstance(w, CustomPythonDashboardWidget) and w.custom_widget:
+                    try:
+                        cfg["custom_config"] = w.custom_widget.get_custom_config()
+                    except Exception:
+                        pass
                 widgets_data.append(cfg)
         return widgets_data
 
@@ -2627,6 +2850,8 @@ class WidgetsTab(QWidget):
                 widget = TerminalWidget(self.canvas, cfg)
             elif wtype == "shape":
                 widget = ShapeWidget(self.canvas, cfg)
+            elif wtype == "custom_python":
+                widget = CustomPythonDashboardWidget(self.canvas, cfg, self.can_thread)
             else:
                 continue
             self._place_widget(widget, pos)
@@ -2653,11 +2878,14 @@ class WidgetsTab(QWidget):
             widget = TerminalWidget(self.canvas, cfg)
         elif wtype == "shape":
             widget = ShapeWidget(self.canvas, cfg)
+        elif wtype == "custom_python":
+            widget = CustomPythonDashboardWidget(self.canvas, cfg, self.can_thread)
         else:
             return None
 
         self._place_widget(widget, pos)
         return widget
+
 
 
 

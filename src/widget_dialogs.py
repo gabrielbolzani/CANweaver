@@ -1505,3 +1505,124 @@ class ShapeDialog(QDialog):
             "fill_color": fill_color,
             "corner_radius": self.sp_radius.value() if shape_type == "rectangle" else 0
         }
+
+
+class CustomPythonDialog(QDialog):
+    """Diálogo de configuração e hot-reload para widgets desenvolvidos em Python."""
+    def __init__(self, parent=None, config=None, grid_size: int = 20):
+        super().__init__(parent)
+        self.setWindowTitle("Configuração do Widget Python")
+        self.setFixedWidth(440)
+        self.setStyleSheet("background-color: #202024; color: white;")
+        self.config = config or {}
+        self.grid_size = grid_size
+        self._script_path = self.config.get("script_path", "")
+        self.reload_requested = False
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        lbl_header = QLabel("🐍 Widget Customizado em Python", self)
+        lbl_header.setStyleSheet("font-size: 14px; font-weight: bold; color: #38bdf8;")
+        layout.addWidget(lbl_header)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        # Arquivo de script
+        path_layout = QHBoxLayout()
+        self.txt_path = QLineEdit(self._script_path)
+        self.txt_path.setReadOnly(True)
+        self.txt_path.setStyleSheet("background-color: #2e3035; color: #a1a1aa; border: 1px solid #444; border-radius: 4px; padding: 4px;")
+        path_layout.addWidget(self.txt_path)
+
+        btn_browse = QPushButton("Procurar...")
+        btn_browse.setStyleSheet("background-color: #3b82f6; color: white; padding: 5px 10px; border-radius: 4px; font-weight: bold;")
+        btn_browse.clicked.connect(self._browse_script)
+        path_layout.addWidget(btn_browse)
+
+        form.addRow("Arquivo .py:", path_layout)
+
+        # Botões de ação rápida do script
+        action_layout = QHBoxLayout()
+        btn_reload = QPushButton("🔄 Recarregar Código (Hot-reload)")
+        btn_reload.setStyleSheet("background-color: #10b981; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
+        btn_reload.clicked.connect(self._on_reload)
+        action_layout.addWidget(btn_reload)
+
+        btn_open_file = QPushButton("📝 Abrir no Editor")
+        btn_open_file.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px; border: 1px solid #444;")
+        btn_open_file.clicked.connect(self._open_in_editor)
+        action_layout.addWidget(btn_open_file)
+
+        form.addRow("Ações:", action_layout)
+
+        # Dimensões
+        self.sp_width = QSpinBox()
+        self.sp_width.setRange(50, 2000)
+        self.sp_width.setValue(int(self.config.get("width", 280)))
+        self.sp_width.setSingleStep(self.grid_size)
+        self.sp_width.setStyleSheet("background-color: #2e3035; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px;")
+        form.addRow("Largura (px):", self.sp_width)
+
+        self.sp_height = QSpinBox()
+        self.sp_height.setRange(50, 2000)
+        self.sp_height.setValue(int(self.config.get("height", 200)))
+        self.sp_height.setSingleStep(self.grid_size)
+        self.sp_height.setStyleSheet("background-color: #2e3035; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px;")
+        form.addRow("Altura (px):", self.sp_height)
+
+        self.chk_snap = QCheckBox("Ajustar tamanho aos passos da grade")
+        self.chk_snap.setChecked(self.config.get("snap_size", True))
+        self.chk_snap.setStyleSheet("color: white;")
+        form.addRow("", self.chk_snap)
+
+        layout.addLayout(form)
+
+        # Botoes OK / Cancel
+        btn_box = QHBoxLayout()
+        btn_ok = QPushButton("Aplicar")
+        btn_ok.setStyleSheet("background-color: #3b82f6; color: white; padding: 8px 16px; border-radius: 4px; font-weight: bold;")
+        btn_ok.clicked.connect(self.accept)
+
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.setStyleSheet("background-color: #2e3035; color: white; padding: 8px 16px; border-radius: 4px;")
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_box.addStretch()
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_ok)
+        layout.addLayout(btn_box)
+
+    def _browse_script(self):
+        from PyQt6.QtWidgets import QFileDialog
+        from src.custom_widget_api import get_custom_widgets_directory
+        start_dir = get_custom_widgets_directory()
+        fn, _ = QFileDialog.getOpenFileName(self, "Selecionar Widget Python", start_dir, "Arquivos Python (*.py)")
+        if fn:
+            self._script_path = fn
+            self.txt_path.setText(fn)
+
+    def _on_reload(self):
+        self.reload_requested = True
+        self.accept()
+
+    def _open_in_editor(self):
+        import os
+        if self._script_path and os.path.exists(self._script_path):
+            try:
+                os.startfile(self._script_path)
+            except Exception:
+                pass
+
+    def get_config(self) -> dict:
+        cfg = dict(self.config)
+        cfg["type"] = "custom_python"
+        cfg["script_path"] = self._script_path
+        cfg["width"] = self.sp_width.value()
+        cfg["height"] = self.sp_height.value()
+        cfg["snap_size"] = self.chk_snap.isChecked()
+        return cfg
+
