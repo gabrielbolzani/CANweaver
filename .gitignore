@@ -26,3 +26,16 @@ ai_config.json
 .canweaver/
 ai_history.json
 
+# Pastas e widgets privados locais (Lume / Usuário - nunca subir ao Git)
+lume_widgets/
+lume_widgets/**
+custom_widgets_private/
+custom_widgets/private/
+custom_widgets/lume/
+
+# Arquivos locais de teste e scripts de inicialização
+AMT_Loc
+Van Peujeout
+CanWeaver.sh
+
+

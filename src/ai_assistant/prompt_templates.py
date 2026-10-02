@@ -59,8 +59,8 @@ Sempre que sua resposta incluir uma sugestão concreta de widget, filtro ou docu
 ```json:create_widget
 {
   "type": "incremental_controller",
-  "name": "Controle 405",
-  "can_id": "405",
+  "name": "Controle 480",
+  "can_id": "480",
   "hz": 20,
   "periodic": true,
   "mutual_exclusion": true,

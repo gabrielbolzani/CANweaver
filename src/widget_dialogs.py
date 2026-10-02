@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox,
     QSpinBox, QDoubleSpinBox, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QCheckBox,
-    QColorDialog, QFrame, QSizePolicy, QWidget
+    QColorDialog, QFrame, QSizePolicy, QWidget, QScrollArea, QGroupBox
 )
 from PyQt6.QtGui import QColor
 
@@ -1049,7 +1049,7 @@ class IncrementalControllerDialog(QDialog):
         # Dados Básicos
         form = QFormLayout()
         self.txt_name = QLineEdit(config.get("name", "Controlador Incremental") if config else "Controlador Incremental")
-        self.txt_can_id = QLineEdit(config.get("can_id", "405") if config else "405")
+        self.txt_can_id = QLineEdit(config.get("can_id", "480") if config else "480")
         
         self.txt_base_payload = QLineEdit(config.get("base_payload", "00 00 00 00 00 00 00 00") if config else "00 00 00 00 00 00 00 00")
         self.txt_base_payload.setPlaceholderText("8 bytes em HEX (ex: 00 00 00 00 00 00 00 00)")
@@ -1185,7 +1185,7 @@ class IncrementalControllerDialog(QDialog):
         try:
             int(self.txt_can_id.text().strip(), 16)
         except ValueError:
-            QMessageBox.warning(self, "Erro", "ID CAN deve ser hexadecimal válido (ex: 405 ou 0C0).")
+            QMessageBox.warning(self, "Erro", "ID CAN deve ser hexadecimal válido (ex: 480 ou 0C0).")
             return
 
         valid = [r for r in self._channel_rows if r.is_alive_and_valid()]
@@ -1509,29 +1509,148 @@ class ShapeDialog(QDialog):
 
 class CustomPythonDialog(QDialog):
     """Diálogo de configuração e hot-reload para widgets desenvolvidos em Python."""
-    def __init__(self, parent=None, config=None, grid_size: int = 20):
+    def __init__(self, parent=None, config=None, grid_size: int = 20, custom_widget=None):
         super().__init__(parent)
-        self.setWindowTitle("Configuração do Widget Python")
-        self.setFixedWidth(440)
-        self.setStyleSheet("background-color: #202024; color: white;")
         self.config = config or {}
         self.grid_size = grid_size
-        self._script_path = self.config.get("script_path", "")
+        self.custom_widget = custom_widget
+
+        from src.custom_widget_api import resolve_custom_widget_path
+        self._script_path = resolve_custom_widget_path(self.config.get("script_path", ""))
         self.reload_requested = False
+        self._custom_config_widget = None
+
+        widget_name = getattr(self.custom_widget, "WIDGET_NAME", "Widget Python")
+        self.setWindowTitle(f"Configuração do Widget: {widget_name}")
+        self.setMinimumWidth(480)
+        self.resize(500, 620)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #202024;
+                color: #e4e4e7;
+                font-family: 'Segoe UI', sans-serif;
+            }
+            QGroupBox {
+                border: 1px solid #3f3f46;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 14px;
+                font-weight: bold;
+                color: #38bdf8;
+                font-size: 11px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px;
+            }
+            QCheckBox {
+                color: #e4e4e7;
+                font-size: 11px;
+                spacing: 6px;
+            }
+            QLabel {
+                color: #d4d4d8;
+                font-size: 11px;
+            }
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+                background-color: #2e3035;
+                color: #ffffff;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 4px 6px;
+                font-size: 11px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #202024;
+                color: #ffffff;
+                selection-background-color: #0284c7;
+            }
+        """)
         self._build_ui()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(12, 12, 12, 12)
+        outer_layout.setSpacing(10)
+
+        # Scroll area para conteúdo do diálogo
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background-color: transparent;")
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(0, 0, 6, 0)
         layout.setSpacing(12)
 
-        lbl_header = QLabel("🐍 Widget Customizado em Python", self)
+        # Cabeçalho
+        widget_title = getattr(self.custom_widget, "WIDGET_NAME", "Widget Customizado em Python")
+        lbl_header = QLabel(f"🐍 {widget_title}", scroll_content)
         lbl_header.setStyleSheet("font-size: 14px; font-weight: bold; color: #38bdf8;")
         layout.addWidget(lbl_header)
 
-        form = QFormLayout()
-        form.setSpacing(8)
+        # 1. Configurações Específicas do Widget Customizado (incorporadas diretamente no modal!)
+        if self.custom_widget is not None and hasattr(self.custom_widget, "create_config_widget"):
+            try:
+                self._custom_config_widget = self.custom_widget.create_config_widget(scroll_content)
+            except Exception as e:
+                print(f"Erro ao instanciar create_config_widget: {e}")
 
-        # Arquivo de script
+            if self._custom_config_widget is not None:
+                title = getattr(self.custom_widget, "CONFIG_TITLE", "⚙️ Configurações Específicas do Widget")
+                grp_custom = QGroupBox(title, scroll_content)
+                l_custom = QVBoxLayout(grp_custom)
+                l_custom.setContentsMargins(10, 10, 10, 10)
+                l_custom.setSpacing(8)
+                l_custom.addWidget(self._custom_config_widget)
+
+                if hasattr(self.custom_widget, "reset_default_config"):
+                    btn_reset = QPushButton("↺ Restaurar Padrões do Widget", grp_custom)
+                    btn_reset.setStyleSheet("""
+                        QPushButton {
+                            background-color: #27272a;
+                            color: #a1a1aa;
+                            padding: 5px 10px;
+                            border-radius: 4px;
+                            font-size: 11px;
+                            border: 1px solid #3f3f46;
+                        }
+                        QPushButton:hover {
+                            background-color: #3f3f46;
+                            color: #ffffff;
+                        }
+                    """)
+                    btn_reset.clicked.connect(self.custom_widget.reset_default_config)
+                    l_custom.addWidget(btn_reset, 0, Qt.AlignmentFlag.AlignRight)
+
+                layout.addWidget(grp_custom)
+        elif self.custom_widget is not None and hasattr(self.custom_widget, "open_config_dialog"):
+            custom_cfg_layout = QHBoxLayout()
+            btn_custom_cfg = QPushButton("⚙️ Configurações Específicas do Widget...", scroll_content)
+            btn_custom_cfg.setStyleSheet("""
+                QPushButton {
+                    background-color: #0284c7;
+                    color: white;
+                    padding: 7px 12px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                QPushButton:hover { background-color: #0369a1; }
+            """)
+            btn_custom_cfg.clicked.connect(lambda: self.custom_widget.open_config_dialog(self))
+            custom_cfg_layout.addWidget(btn_custom_cfg)
+            layout.addLayout(custom_cfg_layout)
+
+        # 2. Arquivo de Script e Ações de Código
+        grp_script = QGroupBox("Arquivo do Script & Hot-Reload", scroll_content)
+        l_script = QVBoxLayout(grp_script)
+        l_script.setContentsMargins(10, 8, 10, 8)
+        l_script.setSpacing(8)
+
         path_layout = QHBoxLayout()
         self.txt_path = QLineEdit(self._script_path)
         self.txt_path.setReadOnly(True)
@@ -1542,10 +1661,8 @@ class CustomPythonDialog(QDialog):
         btn_browse.setStyleSheet("background-color: #3b82f6; color: white; padding: 5px 10px; border-radius: 4px; font-weight: bold;")
         btn_browse.clicked.connect(self._browse_script)
         path_layout.addWidget(btn_browse)
+        l_script.addLayout(path_layout)
 
-        form.addRow("Arquivo .py:", path_layout)
-
-        # Botões de ação rápida do script
         action_layout = QHBoxLayout()
         btn_reload = QPushButton("🔄 Recarregar Código (Hot-reload)")
         btn_reload.setStyleSheet("background-color: #10b981; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
@@ -1556,45 +1673,54 @@ class CustomPythonDialog(QDialog):
         btn_open_file.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px; border: 1px solid #444;")
         btn_open_file.clicked.connect(self._open_in_editor)
         action_layout.addWidget(btn_open_file)
+        l_script.addLayout(action_layout)
 
-        form.addRow("Ações:", action_layout)
+        layout.addWidget(grp_script)
 
-        # Dimensões
-        self.sp_width = QSpinBox()
+        # 3. Dimensões
+        grp_dim = QGroupBox("Dimensões do Widget", scroll_content)
+        form_dim = QFormLayout(grp_dim)
+        form_dim.setContentsMargins(10, 8, 10, 8)
+        form_dim.setSpacing(8)
+
+        self.sp_width = QSpinBox(grp_dim)
         self.sp_width.setRange(50, 2000)
         self.sp_width.setValue(int(self.config.get("width", 280)))
         self.sp_width.setSingleStep(self.grid_size)
-        self.sp_width.setStyleSheet("background-color: #2e3035; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px;")
-        form.addRow("Largura (px):", self.sp_width)
+        form_dim.addRow("Largura (px):", self.sp_width)
 
-        self.sp_height = QSpinBox()
+        self.sp_height = QSpinBox(grp_dim)
         self.sp_height.setRange(50, 2000)
         self.sp_height.setValue(int(self.config.get("height", 200)))
         self.sp_height.setSingleStep(self.grid_size)
-        self.sp_height.setStyleSheet("background-color: #2e3035; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px;")
-        form.addRow("Altura (px):", self.sp_height)
+        form_dim.addRow("Altura (px):", self.sp_height)
 
-        self.chk_snap = QCheckBox("Ajustar tamanho aos passos da grade")
+        self.chk_snap = QCheckBox("Ajustar tamanho aos passos da grade", grp_dim)
         self.chk_snap.setChecked(self.config.get("snap_size", True))
-        self.chk_snap.setStyleSheet("color: white;")
-        form.addRow("", self.chk_snap)
+        form_dim.addRow("", self.chk_snap)
 
-        layout.addLayout(form)
+        layout.addWidget(grp_dim)
 
-        # Botoes OK / Cancel
+        scroll.setWidget(scroll_content)
+        outer_layout.addWidget(scroll, 1)
+
+        # 4. Botões Inferiores Fixos (Cancelar / Aplicar)
         btn_box = QHBoxLayout()
-        btn_ok = QPushButton("Aplicar")
-        btn_ok.setStyleSheet("background-color: #3b82f6; color: white; padding: 8px 16px; border-radius: 4px; font-weight: bold;")
-        btn_ok.clicked.connect(self.accept)
+        btn_box.setSpacing(8)
 
-        btn_cancel = QPushButton("Cancelar")
+        btn_cancel = QPushButton("Cancelar", self)
         btn_cancel.setStyleSheet("background-color: #2e3035; color: white; padding: 8px 16px; border-radius: 4px;")
         btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(btn_cancel)
 
         btn_box.addStretch()
-        btn_box.addWidget(btn_cancel)
+
+        btn_ok = QPushButton("Aplicar", self)
+        btn_ok.setStyleSheet("background-color: #3b82f6; color: white; padding: 8px 20px; border-radius: 4px; font-weight: bold;")
+        btn_ok.clicked.connect(self.accept)
         btn_box.addWidget(btn_ok)
-        layout.addLayout(btn_box)
+
+        outer_layout.addLayout(btn_box)
 
     def _browse_script(self):
         from PyQt6.QtWidgets import QFileDialog
@@ -1610,12 +1736,23 @@ class CustomPythonDialog(QDialog):
         self.accept()
 
     def _open_in_editor(self):
-        import os
-        if self._script_path and os.path.exists(self._script_path):
-            try:
-                os.startfile(self._script_path)
-            except Exception:
-                pass
+        if self._script_path:
+            from src.custom_widget_api import open_path_in_system
+            open_path_in_system(self._script_path)
+
+    def accept(self):
+        if self.custom_widget is not None:
+            if hasattr(self.custom_widget, "apply_config"):
+                try:
+                    self.custom_widget.apply_config()
+                except Exception as e:
+                    print(f"Erro ao aplicar configurações do widget: {e}")
+            elif self._custom_config_widget is not None and hasattr(self._custom_config_widget, "apply_config"):
+                try:
+                    self._custom_config_widget.apply_config()
+                except Exception as e:
+                    print(f"Erro ao aplicar configurações do painel: {e}")
+        super().accept()
 
     def get_config(self) -> dict:
         cfg = dict(self.config)
@@ -1624,5 +1761,10 @@ class CustomPythonDialog(QDialog):
         cfg["width"] = self.sp_width.value()
         cfg["height"] = self.sp_height.value()
         cfg["snap_size"] = self.chk_snap.isChecked()
+        if self.custom_widget is not None and hasattr(self.custom_widget, "get_custom_config"):
+            try:
+                cfg["custom_config"] = self.custom_widget.get_custom_config()
+            except Exception:
+                pass
         return cfg
 

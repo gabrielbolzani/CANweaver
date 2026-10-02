@@ -8,6 +8,8 @@ Como usar:
 4. Sobrescreva `on_can_frame(can_id, freq, payload)` para reagir a mensagens recebidas.
 5. No CANweaver, clique com botão direito no Canvas da aba Widgets -> 'Inserir Widget Python (.py)'.
 """
+from __future__ import annotations
+
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSlider, QProgressBar, QFrame, QLineEdit

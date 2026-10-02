@@ -24,7 +24,13 @@ from src.custom_widget_api import (
     CustomWidgetBase,
     load_custom_widget_class_from_file,
     list_available_custom_widgets,
-    get_custom_widgets_directory
+    list_available_custom_widgets_grouped,
+    get_custom_widgets_directory,
+    get_lume_widgets_directory,
+    add_custom_widget_directory,
+    remove_custom_widget_directory,
+    resolve_custom_widget_path,
+    open_path_in_system
 )
 
 
@@ -476,8 +482,6 @@ class DashboardWidget(QWidget):
                 w.duplicate_callback(w)
 
     def show_context_menu(self, global_pos: QPoint | None = None):
-        if not self.edit_mode:
-            return
         if global_pos is None:
             global_pos = get_event_global_pos()
         canvas = self.parent()
@@ -544,10 +548,7 @@ class DashboardWidget(QWidget):
         menu.exec(global_pos)
 
     def contextMenuEvent(self, event):
-        if self.edit_mode:
-            self.show_context_menu(get_event_global_pos(event))
-        else:
-            super().contextMenuEvent(event)
+        self.show_context_menu(get_event_global_pos(event))
 
 
 HANDLE_SIZE = 8
@@ -1503,7 +1504,7 @@ class IncrementalControllerWidget(DashboardWidget):
     def __init__(self, parent, config, can_thread=None):
         super().__init__(parent, config)
         self._can_thread = can_thread
-        self.target_can_id = normalize_can_id(self.config.get("can_id", "405"))
+        self.target_can_id = normalize_can_id(self.config.get("can_id", "480"))
         self.hz = max(1, int(self.config.get("hz", 20)))
         self.is_transmitting = self.config.get("periodic", True)
         self.mutual_exclusion = self.config.get("mutual_exclusion", True)
@@ -2187,7 +2188,7 @@ class CustomPythonDashboardWidget(DashboardWidget):
     def __init__(self, parent, config, can_thread=None):
         super().__init__(parent, config)
         self._can_thread = can_thread
-        self.script_path = self.config.get("script_path", "")
+        self.script_path = resolve_custom_widget_path(self.config.get("script_path", ""))
         self.custom_widget: CustomWidgetBase | None = None
         self._error_msg: str | None = None
 
@@ -2237,6 +2238,7 @@ class CustomPythonDashboardWidget(DashboardWidget):
             if w:
                 w.deleteLater()
 
+        self.script_path = resolve_custom_widget_path(self.script_path)
         if not self.script_path or not os.path.exists(self.script_path):
             self._error_msg = f"Arquivo do script não encontrado:\n{self.script_path}"
             self._build_error_ui()
@@ -2466,10 +2468,12 @@ class WidgetsTab(QWidget):
             "QMenu::item:selected { background-color: #3b82f6; }"
         )
 
-        available_widgets = list_available_custom_widgets()
-        has_items = False
-        for w_info in available_widgets:
-            has_items = True
+        grouped_sections = list_available_custom_widgets_grouped()
+
+        # 1. Widgets da pasta Padrão (custom_widgets/ raiz)
+        default_sec = grouped_sections.get("custom_widgets", {})
+        default_widgets = default_sec.get("widgets", [])
+        for w_info in default_widgets:
             if w_info.get("class"):
                 act = QAction(f"{w_info['name']} ({w_info['file_name']})", self)
                 fpath = w_info["file_path"]
@@ -2480,16 +2484,69 @@ class WidgetsTab(QWidget):
                 act.setEnabled(False)
                 menu_python.addAction(act)
 
-        if has_items:
-            menu_python.addSeparator()
+        # 2. Submenus para cada pasta / subseção adicional (Lume Widgets, subpastas e pastas vinculadas)
+        for sec_id, sec_data in grouped_sections.items():
+            if sec_id == "custom_widgets":
+                continue
+            sec_name = sec_data["name"]
+            sec_path = sec_data["path"]
+            is_lume = sec_data.get("is_lume", False)
+            is_user = sec_data.get("is_user", False)
+            widgets = sec_data.get("widgets", [])
 
-        action_load_external = QAction("Carregar Arquivo .py Externo...", self)
+            submenu_label = f"📁 {sec_name} (Privado)" if is_lume else f"📁 {sec_name}"
+            sub_menu = menu_python.addMenu(submenu_label)
+            sub_menu.setStyleSheet(
+                "QMenu { background-color: #202024; color: white; border: 1px solid #323238; }"
+                "QMenu::item:selected { background-color: #3b82f6; }"
+            )
+
+            if not widgets:
+                empty_act = QAction("(Nenhum widget .py nesta pasta)", self)
+                empty_act.setEnabled(False)
+                sub_menu.addAction(empty_act)
+            else:
+                for w_info in widgets:
+                    if w_info.get("class"):
+                        act = QAction(f"{w_info['name']} ({w_info['file_name']})", self)
+                        fpath = w_info["file_path"]
+                        act.triggered.connect(lambda checked, p=pos, f=fpath: self.add_custom_python_widget(p, f))
+                        sub_menu.addAction(act)
+                    else:
+                        act = QAction(f"{w_info['name']} (⚠️ Erro no script)", self)
+                        act.setEnabled(False)
+                        sub_menu.addAction(act)
+
+            sub_menu.addSeparator()
+            act_open_sec = QAction(f"Abrir Pasta '{sec_name}'...", self)
+            act_open_sec.triggered.connect(lambda checked, d=sec_path: open_path_in_system(d))
+            sub_menu.addAction(act_open_sec)
+
+            if is_user:
+                act_rm_sec = QAction("Desvincular esta Pasta do Menu...", self)
+                act_rm_sec.triggered.connect(lambda checked, d=sec_path: self._remove_custom_widget_folder(d))
+                sub_menu.addAction(act_rm_sec)
+
+        menu_python.addSeparator()
+
+        # Ações de carregamento e gerenciamento de pastas
+        action_load_folder = QAction("➕ Carregar / Vincular Pasta de Widgets...", self)
+        action_load_folder.triggered.connect(self._add_custom_widget_folder)
+        menu_python.addAction(action_load_folder)
+
+        action_load_external = QAction("📂 Carregar Arquivo .py Externo...", self)
         action_load_external.triggered.connect(lambda: self.add_custom_python_widget(pos, None))
         menu_python.addAction(action_load_external)
 
-        action_open_folder = QAction("Abrir Pasta 'custom_widgets'...", self)
+        action_open_folder = QAction("📁 Abrir Pasta 'custom_widgets'...", self)
         action_open_folder.triggered.connect(self._open_custom_widgets_folder)
         menu_python.addAction(action_open_folder)
+
+        lume_folder = get_lume_widgets_directory()
+        if os.path.exists(lume_folder):
+            action_open_lume = QAction("📁 Abrir Pasta 'lume_widgets' (Privada)...", self)
+            action_open_lume.triggered.connect(lambda: open_path_in_system(lume_folder))
+            menu_python.addAction(action_open_lume)
         
         menu.addAction(action_label)
         menu.addAction(action_ind)
@@ -2653,10 +2710,39 @@ class WidgetsTab(QWidget):
         """Abre a pasta custom_widgets no gerenciador de arquivos do sistema."""
         folder = get_custom_widgets_directory()
         if os.path.exists(folder):
-            try:
-                os.startfile(folder)
-            except Exception:
-                pass
+            open_path_in_system(folder)
+
+    def _add_custom_widget_folder(self):
+        """Abre seletor de diretório para vincular uma nova pasta de widgets ao CANweaver."""
+        start_dir = get_custom_widgets_directory()
+        chosen_dir = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Widgets Python (.py)", start_dir)
+        if chosen_dir:
+            if add_custom_widget_directory(chosen_dir):
+                bname = os.path.basename(chosen_dir)
+                QMessageBox.information(
+                    self,
+                    "Pasta Vinculada com Sucesso",
+                    f"A pasta foi vinculada com sucesso!\n\n"
+                    f"📁 {bname}\n({chosen_dir})\n\n"
+                    f"Uma nova subseção com os widgets desta pasta já está disponível no menu 'Inserir Widget Python'."
+                )
+            else:
+                QMessageBox.warning(self, "Aviso", f"Não foi possível vincular a pasta:\n{chosen_dir}")
+
+    def _remove_custom_widget_folder(self, folder_path: str):
+        """Remove uma pasta personalizada da lista vinculada pelo usuário."""
+        bname = os.path.basename(folder_path)
+        ret = QMessageBox.question(
+            self,
+            "Remover Pasta de Widgets",
+            f"Deseja remover a pasta '{bname}' do menu do CANweaver?\n\n"
+            f"Caminho: {folder_path}\n\n"
+            f"(Nenhum arquivo ou script do seu computador será excluído).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if ret == QMessageBox.StandardButton.Yes:
+            remove_custom_widget_directory(folder_path)
+            QMessageBox.information(self, "Pasta Removida", f"A pasta '{bname}' foi desvinculada do menu.")
 
     def _place_widget(self, w: DashboardWidget, pos):
         w.edit_callback = self._edit_widget
@@ -2719,7 +2805,12 @@ class WidgetsTab(QWidget):
         elif wtype == "shape":
             dlg = ShapeDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
         elif wtype == "custom_python":
-            dlg = CustomPythonDialog(self, config=widget.config, grid_size=self.canvas.grid_size)
+            dlg = CustomPythonDialog(
+                self,
+                config=widget.config,
+                grid_size=self.canvas.grid_size,
+                custom_widget=getattr(widget, "custom_widget", None)
+            )
         else:
             return
 
