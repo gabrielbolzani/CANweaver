@@ -29,7 +29,7 @@ from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSlot
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QTableView, QPushButton,
     QTextEdit, QLabel, QHeaderView, QMenu, QCheckBox, QLineEdit,
-    QComboBox, QListWidget, QListWidgetItem, QMessageBox
+    QComboBox, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView
 )
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QColor, QAction
 
@@ -138,6 +138,7 @@ class AnalysisTab(QWidget):
         self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table_view.verticalHeader().setVisible(False)
         self.table_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.table_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         left_layout.addWidget(self.table_view)
 
         # --- PAINEL DIREITO ---
@@ -199,44 +200,57 @@ class AnalysisTab(QWidget):
         bits = (44 + 8 * len(payload)) * 1.2
         self.busload_accumulator += bits
 
-        hex_id = f"{can_id:03X}"
+        hex_id = f"{can_id:03X}" if can_id <= 0x7FF else f"{can_id:X}"
         current_time = time.time()
+        payload_bytes = [b & 0xFF for b in payload]
 
         if hex_id not in self.can_database:
             list_item = QListWidgetItem(f"[{hex_id}] - 0.0 Hz")
             list_item.setFlags(list_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             list_item.setCheckState(Qt.CheckState.Checked)
             list_item.setData(Qt.ItemDataRole.UserRole, hex_id)
-            self.list_ids.addItem(list_item)
 
             self.can_database[hex_id] = {
                 "row_index": self.table_model.rowCount(),
-                "last_payload": list(payload),
+                "last_payload": list(payload_bytes),
                 "last_change_time": [current_time] * 8,
                 "is_static": False,
                 "list_item": list_item
             }
 
             item_id = QStandardItem(hex_id)
+            item_id.setEditable(False)
             tt_id = self.annotation_manager.get_tooltip_for_id(hex_id)
             if tt_id:
                 item_id.setData(True, Qt.ItemDataRole.UserRole + 1)
                 item_id.setToolTip(tt_id)
 
-            row_items = [item_id, QStandardItem(f"{frequency:.1f}")]
-            for i, b in enumerate(payload):
+            item_freq = QStandardItem(f"{frequency:.1f}")
+            item_freq.setEditable(False)
+            row_items = [item_id, item_freq]
+            has_any_annot_in_row = bool(tt_id)
+
+            for i, b in enumerate(payload_bytes):
                 item = QStandardItem(f"{b:02X}" if self.display_format == "HEX" else f"{b:08b}")
+                item.setEditable(False)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setData(f"{b:08b}", Qt.ItemDataRole.UserRole)
 
                 has_any, mask, has_byte = self.annotation_manager.get_annotation_info(hex_id, i)
                 if has_any:
+                    has_any_annot_in_row = True
                     item.setData(True, Qt.ItemDataRole.UserRole + 1)
                     item.setData(mask, Qt.ItemDataRole.UserRole + 3)
                     item.setData(has_byte, Qt.ItemDataRole.UserRole + 4)
                     item.setToolTip(self.annotation_manager.get_tooltip_for_byte(hex_id, i))
 
                 row_items.append(item)
+
+            if has_any_annot_in_row:
+                list_item.setToolTip(tt_id or f"ID [{hex_id}] contém anotações nos bytes.")
+                list_item.setForeground(QColor("#facc15"))
+
+            self.list_ids.addItem(list_item)
             self.table_model.appendRow(row_items)
             self.update_row_visibility(hex_id)
             return
@@ -246,24 +260,26 @@ class AnalysisTab(QWidget):
         self.table_model.item(row_idx, 1).setText(f"{frequency:.1f}")
         db_entry["list_item"].setText(f"[{hex_id}] - {frequency:.1f} Hz")
 
-        payload_len = len(payload)
+        payload_len = len(payload_bytes)
         while len(db_entry["last_payload"]) < payload_len:
             db_entry["last_payload"].append(0)
             db_entry["last_change_time"].append(current_time)
 
         for i in range(payload_len):
+            b_val = payload_bytes[i]
             item = self.table_model.item(row_idx, i + 2)
             if item is None:
-                item = QStandardItem(f"{payload[i]:02X}" if self.display_format == "HEX" else f"{payload[i]:08b}")
+                item = QStandardItem(f"{b_val:02X}" if self.display_format == "HEX" else f"{b_val:08b}")
+                item.setEditable(False)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                item.setData(f"{payload[i]:08b}", Qt.ItemDataRole.UserRole)
+                item.setData(f"{b_val:08b}", Qt.ItemDataRole.UserRole)
                 self.table_model.setItem(row_idx, i + 2, item)
 
-            if db_entry["last_payload"][i] != payload[i]:
-                item.setText(f"{payload[i]:02X}" if self.display_format == "HEX" else f"{payload[i]:08b}")
+            if db_entry["last_payload"][i] != b_val:
+                item.setText(f"{b_val:02X}" if self.display_format == "HEX" else f"{b_val:08b}")
                 item.setData(f"{db_entry['last_payload'][i]:08b}", Qt.ItemDataRole.UserRole)
                 db_entry["last_change_time"][i] = current_time
-                db_entry["last_payload"][i] = payload[i]
+                db_entry["last_payload"][i] = b_val
                 item.setBackground(QColor("#1e3a8a"))
                 item.setForeground(QColor("#ffffff"))
 
@@ -415,7 +431,8 @@ class AnalysisTab(QWidget):
             for i in range(len(payload)):
                 item = self.table_model.item(row_idx, i + 2)
                 if item:
-                    item.setText(f"{payload[i]:02X}" if self.display_format == "HEX" else f"{payload[i]:08b}")
+                    b_val = payload[i] & 0xFF
+                    item.setText(f"{b_val:02X}" if self.display_format == "HEX" else f"{b_val:08b}")
 
     # ------------------------------------------------------------------
     # Context menu e anotações
@@ -457,21 +474,50 @@ class AnalysisTab(QWidget):
             if text:
                 try:
                     self.annotation_manager.add_comment(target, text)
-
-                    item = self.table_model.itemFromIndex(index)
-                    if item:
-                        if "Byte" in target or "Bit" in target:
-                            byte_idx = index.column() - 2
-                            has_any, mask, has_byte = self.annotation_manager.get_annotation_info(can_id, byte_idx)
-                            item.setData(True, Qt.ItemDataRole.UserRole + 1)
-                            item.setData(mask, Qt.ItemDataRole.UserRole + 3)
-                            item.setData(has_byte, Qt.ItemDataRole.UserRole + 4)
-                            item.setToolTip(self.annotation_manager.get_tooltip_for_byte(can_id, byte_idx))
-                        else:
-                            item.setData(True, Qt.ItemDataRole.UserRole + 1)
-                            item.setToolTip(self.annotation_manager.get_tooltip_for_id(can_id))
+                    self.refresh_annotations()
                 except Exception as e:
                     QMessageBox.critical(self, "Erro", f"Não foi possível salvar arquivo:\n{e}")
+
+    def refresh_annotations(self):
+        """Atualiza marcações visuais (bordas amarelas), tooltips e lista para todos os IDs."""
+        for hex_id, info in self.can_database.items():
+            row_idx = info.get("row_index")
+            if row_idx is None or row_idx >= self.table_model.rowCount():
+                continue
+
+            # 1. Coluna ID (Coluna 0)
+            item_id = self.table_model.item(row_idx, 0)
+            tt_id = self.annotation_manager.get_tooltip_for_id(hex_id)
+            if item_id:
+                item_id.setData(bool(tt_id), Qt.ItemDataRole.UserRole + 1)
+                item_id.setToolTip(tt_id or "")
+
+            # 2. Colunas de Bytes (Colunas 2..9)
+            payload = info.get("last_payload", [])
+            has_any_byte_annot = False
+            for i in range(len(payload)):
+                item_byte = self.table_model.item(row_idx, i + 2)
+                if not item_byte:
+                    continue
+                has_any, mask, has_byte = self.annotation_manager.get_annotation_info(hex_id, i)
+                if has_any:
+                    has_any_byte_annot = True
+                item_byte.setData(has_any, Qt.ItemDataRole.UserRole + 1)
+                item_byte.setData(mask, Qt.ItemDataRole.UserRole + 3)
+                item_byte.setData(has_byte, Qt.ItemDataRole.UserRole + 4)
+                item_byte.setToolTip(self.annotation_manager.get_tooltip_for_byte(hex_id, i) if has_any else "")
+
+            # 3. Item na lista lateral de IDs (list_ids)
+            list_item = info.get("list_item")
+            if list_item:
+                if tt_id or has_any_byte_annot:
+                    list_item.setToolTip(tt_id or f"ID [{hex_id}] contém anotações nos bytes.")
+                    list_item.setForeground(QColor("#facc15"))
+                else:
+                    list_item.setToolTip("")
+                    list_item.setForeground(QColor("#f4f4f5"))
+
+        self.table_view.viewport().update()
 
     def clear_data(self):
         """Limpa o banco de dados e a tabela ao reconectar."""

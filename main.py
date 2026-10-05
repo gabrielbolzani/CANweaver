@@ -495,6 +495,8 @@ class MainWindow(QMainWindow):
         self.annotation_manager.append_raw_markdown(new_content)
         if hasattr(self, "docs_tab"):
             self.docs_tab.reload_file_if_open("CANweaver_Projeto.md")
+        if hasattr(self, "analysis_tab") and hasattr(self.analysis_tab, "refresh_annotations"):
+            self.analysis_tab.refresh_annotations()
         self.statusBar().showMessage("CAN Copilot: Documentação do projeto atualizada.", 4000)
 
 
@@ -744,9 +746,16 @@ class MainWindow(QMainWindow):
                 return
 
             with zipfile.ZipFile(file_path, 'r') as zipf:
-                names = zipf.namelist()
-                valid_project_files = {"CANweaver_Projeto.md", "transmit_tasks.json", "dashboard_layout.json"}
-                found = [f for f in valid_project_files if f in names]
+                def _find_zip_entry(target_basename: str) -> str | None:
+                    target_lower = target_basename.lower()
+                    for name in zipf.namelist():
+                        clean = name.replace('\\', '/')
+                        if os.path.basename(clean).lower() == target_lower:
+                            return name
+                    return None
+
+                valid_project_basenames = {"canweaver_projeto.md", "transmit_tasks.json", "dashboard_layout.json"}
+                found = [name for name in zipf.namelist() if os.path.basename(name.replace('\\', '/')).lower() in valid_project_basenames]
                 if not found:
                     QMessageBox.warning(
                         self, "Projeto Não Reconhecido",
@@ -764,8 +773,9 @@ class MainWindow(QMainWindow):
                             except Exception:
                                 pass
 
-                if "CANweaver_Projeto.md" in names:
-                    md_content = zipf.read("CANweaver_Projeto.md").decode("utf-8")
+                md_entry = _find_zip_entry("CANweaver_Projeto.md")
+                if md_entry:
+                    md_content = zipf.read(md_entry).decode("utf-8-sig")
                     with open(self.annotation_manager.filename, "w", encoding="utf-8") as f:
                         f.write(md_content)
                     self.annotation_manager.load()
@@ -773,23 +783,30 @@ class MainWindow(QMainWindow):
                         self.docs_tab.reload_file_if_open("CANweaver_Projeto.md")
 
                 # Extrai outros documentos .md do projeto contidos no pacote ZIP
-                for name in names:
-                    if name.lower().endswith(".md") and os.path.basename(name) != "CANweaver_Projeto.md":
-                        bname = os.path.basename(name)
-                        doc_content = zipf.read(name).decode("utf-8")
+                for name in zipf.namelist():
+                    clean = name.replace('\\', '/')
+                    bname = os.path.basename(clean)
+                    if bname.lower().endswith(".md") and bname.lower() != "canweaver_projeto.md":
+                        doc_content = zipf.read(name).decode("utf-8-sig")
                         target_path = os.path.join(self.project_docs_dir, bname)
                         with open(target_path, "w", encoding="utf-8") as f:
                             f.write(doc_content)
                 if hasattr(self, "docs_tab"):
                     self.docs_tab.refresh_files()
 
-                if "transmit_tasks.json" in names:
-                    tasks = json.loads(zipf.read("transmit_tasks.json").decode("utf-8"))
+                transmit_entry = _find_zip_entry("transmit_tasks.json")
+                if transmit_entry:
+                    tasks = json.loads(zipf.read(transmit_entry).decode("utf-8-sig"))
                     self.transmit_tab.import_data(tasks)
 
-                if "dashboard_layout.json" in names:
-                    layout = json.loads(zipf.read("dashboard_layout.json").decode("utf-8"))
+                dashboard_entry = _find_zip_entry("dashboard_layout.json")
+                if dashboard_entry:
+                    layout = json.loads(zipf.read(dashboard_entry).decode("utf-8-sig"))
                     self.widgets_tab.import_data(layout)
+
+            # Notifica a aba de análise para atualizar bordas amarelas, tooltips e marcações em tempo real
+            if hasattr(self, "analysis_tab") and hasattr(self.analysis_tab, "refresh_annotations"):
+                self.analysis_tab.refresh_annotations()
 
             if not is_autosave:
                 self._set_project_path(file_path)
@@ -873,9 +890,6 @@ class MainWindow(QMainWindow):
         self.can_thread = CANWorker()
         self.can_thread.mode = config["mode"]
 
-        if config.get("playback_loop"):
-            self.can_thread.playback_loop = config["playback_loop"]
-
         if config["mode"] == "HARDWARE":
             if config.get("interface") == "socketcan":
                 bring_up_socketcan(config.get("channel", "can0"), config.get("bitrate", 500000), listen_only=False)
@@ -898,7 +912,7 @@ class MainWindow(QMainWindow):
                 return
             self.can_thread.playback_file = config["playback_file"]
             self.can_thread.playback_transmit = config.get("playback_transmit", False)
-            self.can_thread.playback_loop = config.get("playback_loop", False)
+            self.can_thread.playback_loop = self.btn_player_loop.isChecked() if hasattr(self, "btn_player_loop") else False
             self.can_thread.playback_speed = 1.0
             self.lbl_status.setText(f"Playback: {os.path.basename(config['playback_file'])}")
         else:
@@ -926,11 +940,6 @@ class MainWindow(QMainWindow):
             self.lbl_player_status.setStyleSheet("color: #10b981; font-weight: bold; font-size: 11px;")
             self.btn_play_pause.setText("⏸ Pausar")
             self.btn_play_pause.setStyleSheet(self._play_button_style(playing=True))
-            
-            is_loop = config.get("playback_loop", False)
-            self.btn_player_loop.blockSignals(True)
-            self.btn_player_loop.setChecked(is_loop)
-            self.btn_player_loop.blockSignals(False)
 
             self.cb_player_speed.blockSignals(True)
             self.cb_player_speed.setCurrentText("1.0x")
@@ -1119,7 +1128,7 @@ class MainWindow(QMainWindow):
 
     def _record_frame(self, can_id: int, frequency: float, payload: list):
         if self.is_recording and self.record_writer:
-            self.record_writer.writerow([time.time(), f"{can_id:03X}", len(payload)] + list(payload))
+            self.record_writer.writerow([time.time(), f"{can_id:03X}", len(payload)] + [f"{b & 0xFF:02X}" for b in payload])
 
     def _update_record_time(self):
         if self.is_recording:

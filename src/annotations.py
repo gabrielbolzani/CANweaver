@@ -27,6 +27,56 @@ import re
 from PyQt6.QtCore import QDateTime
 
 
+def normalize_can_hex(id_val: str | int) -> str:
+    """Converte ID CAN (0x0C0, 0c0, C0, 192 dec, int, etc.) para hex padronizado maiúsculo."""
+    s = str(id_val).strip()
+    if not s:
+        return ""
+    try:
+        val = int(s, 16) if not s.lower().startswith("0x") else int(s, 0)
+    except ValueError:
+        try:
+            val = int(s, 10)
+        except ValueError:
+            return s.upper()
+    if val <= 0x7FF:
+        return f"{val:03X}"
+    return f"{val:X}"
+
+
+def normalize_target(target: str) -> str:
+    """
+    Normaliza a string de alvo para garantir casamento seguro independente de variações.
+    Exemplos:
+      'ID 0x0c0' -> 'ID 0C0'
+      '0x0c0' -> 'ID 0C0'
+      'ID c0' -> 'ID 0C0'
+      'ID 0C0 - Byte 2' -> 'ID 0C0 - Byte 2'
+      'ID 0c0 - byte 2 - bit 7' -> 'ID 0C0 - Byte 2 - Bit 7'
+    """
+    t = str(target).strip()
+    m = re.match(r"^(?:ID\s+)?([0-9a-fA-FxX]+)(.*)$", t, re.IGNORECASE)
+    if not m:
+        return t
+    raw_id = m.group(1)
+    rest = m.group(2)
+    try:
+        int(raw_id, 16) if not raw_id.lower().startswith("0x") else int(raw_id, 0)
+    except ValueError:
+        return t
+
+    canon_id = normalize_can_hex(raw_id)
+
+    if rest:
+        m_byte_bit = re.match(r"^\s*-\s*byte\s*(\d+)\s*-\s*bit\s*(\d+)", rest, re.IGNORECASE)
+        if m_byte_bit:
+            return f"ID {canon_id} - Byte {m_byte_bit.group(1)} - Bit {m_byte_bit.group(2)}"
+        m_byte = re.match(r"^\s*-\s*byte\s*(\d+)", rest, re.IGNORECASE)
+        if m_byte:
+            return f"ID {canon_id} - Byte {m_byte.group(1)}"
+    return f"ID {canon_id}"
+
+
 class AnnotationManager:
     """Gerencia anotações salvas em CANweaver_Projeto.md."""
 
@@ -42,7 +92,7 @@ class AnnotationManager:
             return
 
         try:
-            with open(self.filename, "r", encoding="utf-8") as f:
+            with open(self.filename, "r", encoding="utf-8-sig") as f:
                 lines = f.readlines()
         except Exception:
             return
@@ -51,16 +101,17 @@ class AnnotationManager:
         current_comment = []
 
         for line in lines:
-            if line.startswith("## ["):
+            line_str = line.strip().lstrip("\ufeff")
+            if re.match(r"^##\s*\[", line_str):
                 if current_target and current_comment:
                     self._save_to_dict(current_target, "\n".join(current_comment).strip())
-                m = re.search(r"## \[(.*?)\]", line)
+                m = re.search(r"##\s*\[(.*?)\]", line_str)
                 if m:
-                    current_target = m.group(1)
+                    current_target = m.group(1).strip()
                 current_comment = []
             else:
-                if current_target and line.strip() != "":
-                    current_comment.append(line.strip())
+                if current_target and line_str != "":
+                    current_comment.append(line_str)
 
         if current_target and current_comment:
             self._save_to_dict(current_target, "\n".join(current_comment).strip())
@@ -78,11 +129,12 @@ class AnnotationManager:
         """Adiciona um comentário ao arquivo e ao dicionário em memória."""
         if not text:
             return
+        norm_target = normalize_target(target)
         with open(self.filename, "a", encoding="utf-8") as f:
             timestamp = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
-            f.write(f"\n## [{target}] - {timestamp}\n")
+            f.write(f"\n## [{norm_target}] - {timestamp}\n")
             f.write(f"{text}\n")
-        self._save_to_dict(target, text)
+        self._save_to_dict(norm_target, text)
 
     def append_raw_markdown(self, markdown_text: str):
         """Acrescenta texto Markdown gerado pela IA ou usuário diretamente ao arquivo de projeto."""
@@ -97,19 +149,22 @@ class AnnotationManager:
     def _save_to_dict(self, target: str, comment: str):
         if not comment:
             return
-        if target not in self.annotations:
-            self.annotations[target] = []
-        self.annotations[target].append(comment)
+        norm_target = normalize_target(target)
+        if norm_target not in self.annotations:
+            self.annotations[norm_target] = []
+        self.annotations[norm_target].append(comment)
 
     def get_tooltip_for_id(self, hex_id: str) -> str:
-        target = f"ID {hex_id}"
+        canon_id = normalize_can_hex(hex_id)
+        target = f"ID {canon_id}"
         if target in self.annotations:
             return "\n---\n".join(self.annotations[target])
         return ""
 
     def get_tooltip_for_byte(self, hex_id: str, byte_idx: int) -> str:
+        canon_id = normalize_can_hex(hex_id)
         comments = []
-        base_target = f"ID {hex_id} - Byte {byte_idx}"
+        base_target = f"ID {canon_id} - Byte {byte_idx}"
 
         if base_target in self.annotations:
             comments.extend(self.annotations[base_target])
@@ -129,7 +184,8 @@ class AnnotationManager:
           bitmask  — int:  máscara com quais bits têm anotação (bit N → 1 << N)
           has_byte — bool: existe anotação no byte inteiro (não em bits específicos)
         """
-        base_target = f"ID {hex_id} - Byte {byte_idx}"
+        canon_id = normalize_can_hex(hex_id)
+        base_target = f"ID {canon_id} - Byte {byte_idx}"
         has_byte = base_target in self.annotations
         has_any = has_byte
         mask = 0

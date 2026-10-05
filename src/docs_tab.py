@@ -627,6 +627,9 @@ class DocsTab(QWidget):
         if os.path.basename(self.current_file_path) == "CANweaver_Projeto.md":
             if self.annotation_manager:
                 self.annotation_manager.load()
+                main_win = self.window()
+                if hasattr(main_win, "analysis_tab") and hasattr(main_win.analysis_tab, "refresh_annotations"):
+                    main_win.analysis_tab.refresh_annotations()
 
         self._update_preview()
 

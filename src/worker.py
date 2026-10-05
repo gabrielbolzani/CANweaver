@@ -121,6 +121,30 @@ class CANWorker(QThread):
         data_hex = " ".join(f"{b:02X}" for b in msg.data) if msg.data else ""
         return "Error Frame", f"Frame de erro genérico (ID={can_id:#05x}, data={data_hex})"
 
+    @staticmethod
+    def _parse_playback_payload(raw_bytes: list) -> list[int]:
+        payload = []
+        for x in raw_bytes:
+            x_str = str(x).strip()
+            if not x_str:
+                continue
+            try:
+                v = int(x_str, 16) if not x_str.lower().startswith("0x") else int(x_str, 0)
+                if v > 255 and x_str.isdigit():
+                    try:
+                        dec_v = int(x_str, 10)
+                        if 0 <= dec_v <= 255:
+                            v = dec_v
+                    except ValueError:
+                        pass
+                payload.append(v & 0xFF)
+            except ValueError:
+                try:
+                    payload.append(int(x_str, 10) & 0xFF)
+                except ValueError:
+                    payload.append(0)
+        return payload
+
     def _run_playback(self):
         try:
             with open(self.playback_file, mode='r', encoding='utf-8') as f:
@@ -145,8 +169,8 @@ class CANWorker(QThread):
                             if 0 <= self.playback_index < self.playback_total:
                                 row = self.playback_rows[self.playback_index]
                                 try:
-                                    can_id = int(row[1], 16)
-                                    payload = [int(x, 16) for x in row[3:]]
+                                    can_id = int(row[1], 16) if not str(row[1]).lower().startswith("0x") else int(str(row[1]), 0)
+                                    payload = self._parse_playback_payload(row[3:])
                                     self.frame_received.emit(can_id, 0.0, payload)
                                     self.playback_progress.emit(self.playback_index, self.playback_total)
                                 except Exception:
@@ -167,8 +191,8 @@ class CANWorker(QThread):
                     row = self.playback_rows[self.playback_index]
 
                     timestamp = float(row[0])
-                    can_id = int(row[1], 16)
-                    payload = [int(x, 16) for x in row[3:]]
+                    can_id = int(row[1], 16) if not str(row[1]).lower().startswith("0x") else int(str(row[1]), 0)
+                    payload = self._parse_playback_payload(row[3:])
 
                     if last_msg_time is not None:
                         delay = timestamp - last_msg_time
@@ -206,13 +230,41 @@ class CANWorker(QThread):
                     
                     self.playback_index += 1
 
-                if not self.running or not self.playback_loop:
+                if not self.running:
                     break
-                
-                self.playback_index = 0 # loop reseta
 
-            if self.running:
-                self.error_occurred.emit("Reprodução concluída com sucesso.")
+                if self.playback_loop:
+                    self.playback_index = 0
+                    continue
+                else:
+                    # Concluiu a reprodução sem loop: aguarda comandos mantendo a thread viva
+                    self.playback_paused = True
+                    self.playback_progress.emit(self.playback_total, self.playback_total)
+                    self.error_occurred.emit("Reprodução concluída com sucesso.")
+
+                    while self.running and self.playback_paused:
+                        if self.seek_requested is not None:
+                            self.playback_index = max(0, min(self.seek_requested, self.playback_total - 1))
+                            self.seek_requested = None
+                            last_msg_time = None
+                            if 0 <= self.playback_index < self.playback_total:
+                                row = self.playback_rows[self.playback_index]
+                                try:
+                                    can_id = int(row[1], 16) if not str(row[1]).lower().startswith("0x") else int(str(row[1]), 0)
+                                    payload = self._parse_playback_payload(row[3:])
+                                    self.frame_received.emit(can_id, 0.0, payload)
+                                    self.playback_progress.emit(self.playback_index, self.playback_total)
+                                except Exception:
+                                    pass
+                        time.sleep(0.04)
+
+                    if not self.running:
+                        break
+
+                    # Ao despausar (ex: usuário clicou em Play de novo), reinicia do início se ainda estiver no final
+                    if self.playback_index >= self.playback_total:
+                        self.playback_index = 0
+                    last_msg_time = None
 
         except Exception as e:
             self.error_occurred.emit(f"Erro no playback: {e}")
@@ -242,9 +294,17 @@ class CANWorker(QThread):
         self.playback_paused = True
 
     def resume_playback(self):
+        if hasattr(self, "playback_total") and self.playback_total > 0:
+            if self.playback_index >= self.playback_total:
+                self.playback_index = 0
         self.playback_paused = False
 
     def toggle_pause_playback(self) -> bool:
+        if hasattr(self, "playback_total") and self.playback_total > 0:
+            if self.playback_index >= self.playback_total:
+                self.playback_index = 0
+                self.playback_paused = False
+                return False  # False = Reproduzindo
         self.playback_paused = not self.playback_paused
         return self.playback_paused
 

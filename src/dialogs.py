@@ -525,7 +525,6 @@ class ConnectionDialog(QDialog):
         self.bitrate = 500000
         self.playback_file = ""
         self.playback_transmit = False
-        self.playback_loop = False
 
         self.layout = QFormLayout(self)
 
@@ -555,8 +554,6 @@ class ConnectionDialog(QDialog):
         self.chk_transmit = QCheckBox("Transmitir no Hardware Real")
         self.chk_transmit.stateChanged.connect(self.on_transmit_change)
 
-        self.chk_loop = QCheckBox("Repetir em Loop")
-
         self.btn_connect = QPushButton("Conectar")
         self.btn_connect.setStyleSheet("background-color: #10b981; color: white; padding: 8px; border-radius: 4px; font-weight: bold;")
         self.btn_connect.clicked.connect(self.accept)
@@ -569,7 +566,6 @@ class ConnectionDialog(QDialog):
         self.layout.addRow("Arquivo Playback:", self.btn_file)
         self.layout.addRow("", self.lbl_file)
         self.layout.addRow("", self.chk_transmit)
-        self.layout.addRow("", self.chk_loop)
         self.layout.addRow(self.btn_connect)
 
         self.on_mode_change(0)
@@ -636,7 +632,6 @@ class ConnectionDialog(QDialog):
             self.set_row_visible(self.btn_file, False)
             self.set_row_visible(self.lbl_file, False)
             self.set_row_visible(self.chk_transmit, False)
-            self.set_row_visible(self.chk_loop, False)
         elif index == 1:  # Simulado
             self.set_row_visible(self.cb_interface, False)
             self.set_row_visible(self.txt_channel, False)
@@ -645,12 +640,10 @@ class ConnectionDialog(QDialog):
             self.set_row_visible(self.btn_file, False)
             self.set_row_visible(self.lbl_file, False)
             self.set_row_visible(self.chk_transmit, False)
-            self.set_row_visible(self.chk_loop, False)
         elif index == 2:  # Playback
             self.set_row_visible(self.btn_file, True)
             self.set_row_visible(self.lbl_file, True)
             self.set_row_visible(self.chk_transmit, True)
-            self.set_row_visible(self.chk_loop, True)
             self.on_transmit_change(self.chk_transmit.checkState().value)
 
     def on_transmit_change(self, state):
@@ -693,8 +686,7 @@ class ConnectionDialog(QDialog):
             "channel": self.channel,
             "bitrate": self.bitrate,
             "playback_file": self.playback_file,
-            "playback_transmit": self.playback_transmit,
-            "playback_loop": self.chk_loop.isChecked()
+            "playback_transmit": self.playback_transmit
         }
 
 
