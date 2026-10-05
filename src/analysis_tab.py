@@ -24,12 +24,15 @@ Exemplo de uso:
 """
 from __future__ import annotations
 
+import os
+import csv
 import time
 from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSlot
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QTableView, QPushButton,
     QTextEdit, QLabel, QHeaderView, QMenu, QCheckBox, QLineEdit,
-    QComboBox, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView
+    QComboBox, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
+    QFileDialog
 )
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QColor, QAction
 
@@ -95,11 +98,16 @@ class AnalysisTab(QWidget):
         self.lbl_errors = QLabel("Erros CAN: 0")
         self.lbl_errors.setStyleSheet("color: #e83f5b; font-weight: bold; margin-left: 20px;")
 
+        self.lbl_id_count = QLabel("IDs no Barramento: 0")
+        self.lbl_id_count.setStyleSheet("color: #38bdf8; font-weight: bold; margin-left: 20px;")
+        self.lbl_id_count.setToolTip("Quantidade total de IDs CAN únicos detectados no barramento")
+
         control_layout.addWidget(self.btn_format)
         control_layout.addWidget(self.chk_fade)
         control_layout.addWidget(self.chk_hide_static)
         control_layout.addWidget(self.lbl_busload)
         control_layout.addWidget(self.lbl_errors)
+        control_layout.addWidget(self.lbl_id_count)
         control_layout.addStretch()
         left_layout.addLayout(control_layout)
 
@@ -117,11 +125,26 @@ class AnalysisTab(QWidget):
         self.txt_filter_freq.setPlaceholderText("Freq. Limit (Hz)")
         self.txt_filter_freq.textChanged.connect(self.apply_filters)
 
+        self.btn_export_ids = QPushButton("📄 Exportar IDs (.csv)")
+        self.btn_export_ids.setToolTip("Exportar lista de IDs únicos para arquivo CSV (um ID por linha)")
+        self.btn_export_ids.setStyleSheet(
+            "QPushButton { background-color: #27272a; color: #38bdf8; border: 1px solid #38bdf8; "
+            "padding: 5px 12px; border-radius: 4px; font-weight: bold; font-size: 11px; } "
+            "QPushButton:hover { background-color: #38bdf8; color: #09090b; } "
+            "QPushButton:pressed { background-color: #0284c7; color: white; }"
+        )
+        self.btn_export_ids.clicked.connect(self.export_unique_ids_csv)
+
+        self.lbl_filtered_count = QLabel("Total: 0 IDs")
+        self.lbl_filtered_count.setStyleSheet("color: #94a3b8; font-size: 12px; margin-left: 8px; font-weight: 500;")
+
         filter_layout.addWidget(QLabel("ID:"))
         filter_layout.addWidget(self.txt_filter_id)
         filter_layout.addWidget(QLabel("Freq:"))
         filter_layout.addWidget(self.cb_freq_op)
         filter_layout.addWidget(self.txt_filter_freq)
+        filter_layout.addWidget(self.btn_export_ids)
+        filter_layout.addWidget(self.lbl_filtered_count)
         filter_layout.addStretch()
         left_layout.addLayout(filter_layout)
 
@@ -145,7 +168,7 @@ class AnalysisTab(QWidget):
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(10, 10, 10, 10)
 
-        lbl_id_filter = QLabel("Visibilidade de IDs (Filtro)")
+        self.lbl_id_filter = QLabel("Visibilidade de IDs (0)")
         id_filter_btns_layout = QHBoxLayout()
         self.btn_select_all = QPushButton("Sel. Todos")
         self.btn_select_all.clicked.connect(self.select_all_ids)
@@ -166,7 +189,7 @@ class AnalysisTab(QWidget):
         )
         self.txt_search_list_ids.textChanged.connect(self._filter_list_ids_ui)
 
-        right_layout.addWidget(lbl_id_filter)
+        right_layout.addWidget(self.lbl_id_filter)
         right_layout.addLayout(id_filter_btns_layout)
         right_layout.addWidget(self.list_ids, 1)
         right_layout.addWidget(self.txt_search_list_ids)
@@ -253,6 +276,7 @@ class AnalysisTab(QWidget):
             self.list_ids.addItem(list_item)
             self.table_model.appendRow(row_items)
             self.update_row_visibility(hex_id)
+            self._update_id_counts()
             return
 
         db_entry = self.can_database[hex_id]
@@ -350,6 +374,7 @@ class AnalysisTab(QWidget):
     def apply_filters(self):
         for hex_id in self.can_database.keys():
             self.update_row_visibility(hex_id)
+        self._update_id_counts()
 
     def apply_id_filter(self, filter_text: str):
         """Aplica filtro de texto no ID do sniffer programaticamente."""
@@ -397,21 +422,29 @@ class AnalysisTab(QWidget):
         self.hide_static = self.chk_hide_static.isChecked()
         for hex_id in self.can_database.keys():
             self.update_row_visibility(hex_id)
+        self._update_id_counts()
 
     @pyqtSlot()
     def select_all_ids(self):
+        self.list_ids.blockSignals(True)
         for i in range(self.list_ids.count()):
             self.list_ids.item(i).setCheckState(Qt.CheckState.Checked)
+        self.list_ids.blockSignals(False)
+        self.apply_filters()
 
     @pyqtSlot()
     def deselect_all_ids(self):
+        self.list_ids.blockSignals(True)
         for i in range(self.list_ids.count()):
             self.list_ids.item(i).setCheckState(Qt.CheckState.Unchecked)
+        self.list_ids.blockSignals(False)
+        self.apply_filters()
 
     @pyqtSlot(QListWidgetItem)
     def on_id_checkbox_changed(self, item):
         hex_id = item.data(Qt.ItemDataRole.UserRole)
         self.update_row_visibility(hex_id)
+        self._update_id_counts()
 
     # ------------------------------------------------------------------
     # Formato de exibição
@@ -526,6 +559,7 @@ class AnalysisTab(QWidget):
         self.list_ids.clear()
         self._error_count = 0
         self.lbl_errors.setText("Erros CAN: 0")
+        self._update_id_counts()
 
     def clear_stale_ids(self, timeout_s: float = 5.0):
         """Remove da tabela os IDs que não receberam frames há mais de timeout_s segundos."""
@@ -563,4 +597,112 @@ class AnalysisTab(QWidget):
                 if other_info["row_index"] > row_idx:
                     other_info["row_index"] -= 1
 
+        self._update_id_counts()
         return len(stale_ids)
+
+    def _update_id_counts(self):
+        """Atualiza os contadores de IDs únicos no barramento e visíveis após filtros."""
+        total_unique = len(self.can_database)
+        if hasattr(self, "lbl_id_count"):
+            self.lbl_id_count.setText(f"IDs no Barramento: {total_unique}")
+        if hasattr(self, "lbl_id_filter"):
+            self.lbl_id_filter.setText(f"Visibilidade de IDs ({total_unique})")
+
+        if hasattr(self, "lbl_filtered_count"):
+            visible = sum(
+                1 for info in self.can_database.values()
+                if not self.table_view.isRowHidden(info["row_index"])
+            )
+            if visible < total_unique:
+                self.lbl_filtered_count.setText(f"Exibindo: {visible} de {total_unique} IDs")
+            else:
+                self.lbl_filtered_count.setText(f"Total: {total_unique} IDs")
+
+    @pyqtSlot()
+    def export_unique_ids_csv(self, destination_path: str | None = None, ids_to_export: list[str] | None = None) -> str | None:
+        """Exporta lista em CSV com os IDs CAN únicos pulando linha (um ID por linha)."""
+        if not self.can_database:
+            if not destination_path:
+                QMessageBox.information(
+                    self, "Exportar IDs", "Nenhum ID CAN detectado no barramento até o momento."
+                )
+            return None
+
+        all_ids = sorted(self.can_database.keys(), key=lambda x: int(x, 16))
+        visible_ids = [
+            hex_id for hex_id in all_ids
+            if not self.table_view.isRowHidden(self.can_database[hex_id]["row_index"])
+        ]
+
+        if ids_to_export is not None:
+            target_ids = ids_to_export
+        elif destination_path is not None:
+            target_ids = visible_ids if visible_ids else all_ids
+        else:
+            target_ids = all_ids
+            # Se houver filtro ativo e nem todos os IDs estiverem visíveis, permite escolher
+            if 0 < len(visible_ids) < len(all_ids):
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Exportar IDs CAN")
+                msg_box.setText(
+                    f"Filtro ativo detectado.\n\n"
+                    f"• IDs visíveis com filtro: {len(visible_ids)}\n"
+                    f"• Total de IDs no barramento: {len(all_ids)}\n\n"
+                    f"Quais IDs você deseja exportar para o CSV?"
+                )
+                btn_visible = msg_box.addButton(f"Apenas Filtrados ({len(visible_ids)})", QMessageBox.ButtonRole.ActionRole)
+                btn_all = msg_box.addButton(f"Todos do Barramento ({len(all_ids)})", QMessageBox.ButtonRole.ActionRole)
+                btn_cancel = msg_box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+                msg_box.setDefaultButton(btn_visible)
+                msg_box.exec()
+
+                clicked = msg_box.clickedButton()
+                if clicked == btn_cancel:
+                    return None
+                elif clicked == btn_visible:
+                    target_ids = visible_ids
+                else:
+                    target_ids = all_ids
+            elif len(visible_ids) == 0:
+                QMessageBox.warning(
+                    self, "Exportar IDs", "Nenhum ID corresponde ao filtro atual."
+                )
+                return None
+
+        file_path = destination_path
+        if not file_path:
+            default_filename = f"ids_can_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Exportar Lista de IDs (CSV)",
+                default_filename,
+                "Arquivos CSV (*.csv);;Todos os Arquivos (*)"
+            )
+            if not file_path:
+                return None
+
+        if not file_path.lower().endswith(".csv"):
+            file_path += ".csv"
+
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["ID"])
+                for hex_id in target_ids:
+                    writer.writerow([hex_id])
+
+            if not destination_path:
+                QMessageBox.information(
+                    self,
+                    "Exportação Concluída",
+                    f"Lista com {len(target_ids)} IDs únicos exportada com sucesso para:\n{os.path.basename(file_path)}"
+                )
+            return file_path
+        except Exception as e:
+            if not destination_path:
+                QMessageBox.critical(
+                    self,
+                    "Erro ao Exportar",
+                    f"Não foi possível salvar o arquivo:\n{e}"
+                )
+            return None
