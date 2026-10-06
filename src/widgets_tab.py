@@ -18,7 +18,8 @@ import traceback
 
 from src.widget_dialogs import (
     LabelDialog, IndicatorDialog, ControllerDialog, GaugeDialog, MultiIndicatorDialog,
-    IncrementalControllerDialog, TerminalDialog, ShapeDialog, CustomPythonDialog
+    IncrementalControllerDialog, TerminalDialog, ShapeDialog, CustomPythonDialog,
+    extract_can_signal, parse_factor_str
 )
 from src.custom_widget_api import (
     CustomWidgetBase,
@@ -1070,7 +1071,8 @@ class MultiIndicatorWidget(DashboardWidget):
         self.config["states"] = normalized_states
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(2)
         
         self.lbl_title = QLabel(str(self.config.get("name", "")))
         self.lbl_title.setStyleSheet("color: #a1a1aa; font-size: 11px;")
@@ -1078,9 +1080,15 @@ class MultiIndicatorWidget(DashboardWidget):
         
         self.lbl_display = QLabel()
         self.lbl_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.lbl_aux = QLabel()
+        self.lbl_aux.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_aux.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.lbl_aux.setWordWrap(True)
         
         layout.addWidget(self.lbl_title)
         layout.addWidget(self.lbl_display)
+        layout.addWidget(self.lbl_aux)
         
         self.current_state_idx = -1
         self.update_visuals()
@@ -1113,9 +1121,11 @@ class MultiIndicatorWidget(DashboardWidget):
             states = self.config.get("states", [])
             st = states[self.current_state_idx]
             val = st.get("label", "")
+            aux = st.get("aux_text", "")
             color = st.get("color", "#ffffff")
         else:
             val = self.config.get("default_label", "??")
+            aux = self.config.get("default_aux_text", "")
             color = self.config.get("default_color", "#52525b")
             
         if self.config.get("visual_type") == "LED":
@@ -1124,9 +1134,34 @@ class MultiIndicatorWidget(DashboardWidget):
             led_size = self.config.get("led_size", 32)
             self.lbl_display.setText("●")
             self.lbl_display.setStyleSheet(f"color: {color}; font-size: {led_size}px;")
+
+            if val and aux:
+                self.lbl_aux.setText(f"{val} — {aux}")
+                self.lbl_aux.setVisible(True)
+            elif val or aux:
+                self.lbl_aux.setText(str(val or aux))
+                self.lbl_aux.setVisible(True)
+            else:
+                self.lbl_aux.setText("")
+                self.lbl_aux.setVisible(False)
         else:
             self.lbl_display.setText(str(val))
             self.lbl_display.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
+            if aux:
+                self.lbl_aux.setText(str(aux))
+                self.lbl_aux.setVisible(True)
+            else:
+                self.lbl_aux.setText("")
+                self.lbl_aux.setVisible(False)
+
+        tip_parts = [f"Widget: {self.config.get('name', 'Multi-Estado')}"]
+        if self.target_can_id is not None:
+            tip_parts.append(f"ID CAN: 0x{self.target_can_id:03X}")
+        if val:
+            tip_parts.append(f"Estado: {val}")
+        if aux:
+            tip_parts.append(f"Info: {aux}")
+        self.setToolTip("\n".join(tip_parts))
 
 
 class GaugeWidget(DashboardWidget):
@@ -1135,14 +1170,50 @@ class GaugeWidget(DashboardWidget):
     def __init__(self, parent, config):
         super().__init__(parent, config)
         self.target_can_id = normalize_can_id(self.config.get("can_id"))
+
+        # Determinar modo de conversão (factor_offset ou two_point)
+        mode = self.config.get("conversion_mode")
+        if not mode:
+            if "factor" in self.config or "factor_str" in self.config:
+                mode = "factor_offset"
+            else:
+                mode = "two_point"
+        self.config["conversion_mode"] = mode
+
+        # Extração de bits e bytes
         try:
-            self.config["byte"] = int(self.config.get("byte", 0))
+            self.config["start_byte"] = int(self.config.get("start_byte", self.config.get("byte", 0)))
         except (ValueError, TypeError):
-            self.config["byte"] = 0
+            self.config["start_byte"] = 0
+        self.config["byte"] = self.config["start_byte"]
+
         try:
-            self.config["byte_len"] = int(self.config.get("byte_len", 1))
+            self.config["start_bit"] = int(self.config.get("start_bit", 0))
         except (ValueError, TypeError):
-            self.config["byte_len"] = 1
+            self.config["start_bit"] = 0
+
+        try:
+            legacy_bytes = int(self.config.get("byte_len", 1))
+        except (ValueError, TypeError):
+            legacy_bytes = 1
+        try:
+            self.config["bit_length"] = int(self.config.get("bit_length", legacy_bytes * 8))
+        except (ValueError, TypeError):
+            self.config["bit_length"] = 16
+        self.config["byte_len"] = max(1, (self.config["bit_length"] + 7) // 8)
+
+        self.config["endianness"] = str(self.config.get("endianness", "little" if mode == "factor_offset" else "big")).lower()
+        self.config["is_signed"] = bool(self.config.get("is_signed", False))
+
+        # Fórmula direta
+        factor_val = parse_factor_str(self.config.get("factor", 1.0))
+        self.config["factor"] = factor_val
+        try:
+            self.config["offset"] = float(self.config.get("offset", 0.0))
+        except (ValueError, TypeError):
+            self.config["offset"] = 0.0
+
+        # Escala por 2 pontos (legado)
         try:
             self.config["val_min_raw"] = float(self.config.get("val_min_raw", 0))
         except (ValueError, TypeError):
@@ -1159,6 +1230,17 @@ class GaugeWidget(DashboardWidget):
             self.config["val_max_conv"] = float(self.config.get("val_max_conv", 100.0))
         except (ValueError, TypeError):
             self.config["val_max_conv"] = 100.0
+
+        # Faixa do mostrador
+        try:
+            self.config["display_min"] = float(self.config.get("display_min", self.config["val_min_conv"]))
+        except (ValueError, TypeError):
+            self.config["display_min"] = self.config["val_min_conv"]
+        try:
+            self.config["display_max"] = float(self.config.get("display_max", self.config["val_max_conv"]))
+        except (ValueError, TypeError):
+            self.config["display_max"] = self.config["val_max_conv"]
+
         try:
             self.config["gauge_size"] = int(self.config.get("gauge_size", 160))
         except (ValueError, TypeError):
@@ -1166,13 +1248,44 @@ class GaugeWidget(DashboardWidget):
         self.config["show_float"] = bool(self.config.get("show_float", False))
         self.config["invert_direction"] = bool(self.config.get("invert_direction", False))
 
-        self._raw_value = self.config["val_min_raw"]
+        self._has_frame = False
+        if mode == "factor_offset":
+            if factor_val != 0.0:
+                self._raw_value = (self.config["display_min"] - self.config["offset"]) / factor_val
+            else:
+                self._raw_value = 0.0
+        else:
+            self._raw_value = self.config["val_min_raw"]
+
         size = self.config["gauge_size"]
         style = self.config.get("style", "Arco")
         if style == "Barra Horizontal":
             self.setFixedSize(size, max(60, size // 3) + 30)
         else:
             self.setFixedSize(size, size + 30)
+
+        self._update_tooltip()
+
+    def _update_tooltip(self):
+        name = self.config.get("name", "Gauge")
+        cid = self.config.get("can_id", "")
+        unit = self.config.get("unit", "")
+        mode = self.config.get("conversion_mode", "factor_offset")
+        val = self._get_conv_value()
+        val_str = f"{val:.2f} {unit}".strip() if self.config.get("show_float") else f"{int(round(val))} {unit}".strip()
+        lines = [f"<b>{name}</b> (ID: 0x{cid})", f"Valor: <b>{val_str}</b> (Raw: {int(round(self._raw_value))})"]
+        if mode == "factor_offset":
+            factor = self.config.get("factor", 1.0)
+            offset = self.config.get("offset", 0.0)
+            endian = "Intel (Little-Endian)" if self.config.get("endianness") == "little" else "Motorola (Big-Endian)"
+            sb = self.config.get("start_byte", 0)
+            nbits = self.config.get("bit_length", 16)
+            lines.append(f"Decodificação: {endian} | Byte {sb} ({nbits}b)")
+            sign_str = f"+ {offset:g}" if offset >= 0 else f"- {abs(offset):g}"
+            lines.append(f"Fórmula: (Raw × {factor:g}) {sign_str}")
+        else:
+            lines.append(f"Modo: 2 Pontos ({self.config.get('val_min_raw', 0)}➔{self.config.get('val_min_conv', 0)})")
+        self.setToolTip("<br>".join(lines))
 
     def apply_resized_geometry(self, new_geom: QRect):
         super().apply_resized_geometry(new_geom)
@@ -1183,38 +1296,71 @@ class GaugeWidget(DashboardWidget):
             self.config["gauge_size"] = max(40, min(self.width(), self.height() - 30))
         self.update()
 
-    def _get_conv_value(self):
-        v_min = self.config["val_min_raw"]
-        v_max = self.config["val_max_raw"]
-        c_min = self.config["val_min_conv"]
-        c_max = self.config["val_max_conv"]
+    def _get_conv_value(self) -> float:
+        mode = self.config.get("conversion_mode", "factor_offset")
+        if mode == "factor_offset":
+            factor = parse_factor_str(self.config.get("factor", 1.0))
+            offset = float(self.config.get("offset", 0.0))
+            return (self._raw_value * factor) + offset
+        else:
+            v_min = self.config["val_min_raw"]
+            v_max = self.config["val_max_raw"]
+            c_min = self.config["val_min_conv"]
+            c_max = self.config["val_max_conv"]
 
-        if v_max == v_min:
-            return c_min
-        
-        ratio = (self._raw_value - v_min) / (v_max - v_min)
-        return c_min + ratio * (c_max - c_min)
+            if v_max == v_min:
+                return c_min
+            
+            ratio = (self._raw_value - v_min) / (v_max - v_min)
+            return c_min + ratio * (c_max - c_min)
 
     def process_can_frame(self, can_id: int, freq: float, payload: list):
         if can_id != self.target_can_id:
             return
-        byte_idx = self.config["byte"]
-        byte_len = self.config["byte_len"]
-        if byte_idx + byte_len - 1 < len(payload):
-            raw = 0
-            for i in range(byte_len):
-                raw = (raw << 8) | payload[byte_idx + i]
-            
-            # Clamp raw value
+
+        mode = self.config.get("conversion_mode", "factor_offset")
+        if mode == "factor_offset":
+            raw = extract_can_signal(
+                payload,
+                start_byte=self.config.get("start_byte", self.config.get("byte", 0)),
+                start_bit=self.config.get("start_bit", 0),
+                bit_len=self.config.get("bit_length", 16),
+                endianness=self.config.get("endianness", "little"),
+                signed=self.config.get("is_signed", False)
+            )
+            if raw != self._raw_value or not self._has_frame:
+                self._has_frame = True
+                self._raw_value = raw
+                self._update_tooltip()
+                self.update()
+        else:
+            byte_idx = self.config.get("byte", self.config.get("start_byte", 0))
+            bit_len = self.config.get("bit_length", self.config.get("byte_len", 1) * 8)
+            start_bit = self.config.get("start_bit", 0)
+            endianness = self.config.get("endianness", "big")
+            signed = self.config.get("is_signed", False)
+
+            raw = extract_can_signal(
+                payload,
+                start_byte=byte_idx,
+                start_bit=start_bit,
+                bit_len=bit_len,
+                endianness=endianness,
+                signed=signed
+            )
+
+            # Clamp raw value se aplicável no modo 2 pontos
             v_min = self.config["val_min_raw"]
             v_max = self.config["val_max_raw"]
             real_min = min(v_min, v_max)
             real_max = max(v_min, v_max)
             raw = max(real_min, min(real_max, float(raw)))
 
-            if raw != self._raw_value:
+            if raw != self._raw_value or not self._has_frame:
+                self._has_frame = True
                 self._raw_value = raw
-                self.update()  # trigger paintEvent
+                self._update_tooltip()
+                self.update()
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -1227,8 +1373,13 @@ class GaugeWidget(DashboardWidget):
         unit = self.config.get("unit", "")
         show_float = self.config.get("show_float", False)
         
-        c_min = self.config.get("val_min_conv", 0.0)
-        c_max = self.config.get("val_max_conv", 100.0)
+        mode = self.config.get("conversion_mode", "factor_offset")
+        if mode == "factor_offset":
+            c_min = float(self.config.get("display_min", self.config.get("val_min_conv", 0.0)))
+            c_max = float(self.config.get("display_max", self.config.get("val_max_conv", 100.0)))
+        else:
+            c_min = float(self.config.get("val_min_conv", 0.0))
+            c_max = float(self.config.get("val_max_conv", 100.0))
         
         val_conv = self._get_conv_value()
 
@@ -1243,7 +1394,6 @@ class GaugeWidget(DashboardWidget):
         if c_real_max == c_real_min:
             ratio = 0.0
         else:
-            # regardless of whether the scale is inverted, ratio 0 is start, 1 is end
             ratio = (val_conv - c_min) / (c_max - c_min)
             ratio = max(0.0, min(1.0, ratio))
 
@@ -1325,9 +1475,10 @@ class GaugeWidget(DashboardWidget):
             painter.setFont(font_mm)
             txt_min = f"{c_min:.1f}" if show_float else f"{int(c_min)}"
             txt_max = f"{c_max:.1f}" if show_float else f"{int(c_max)}"
-            painter.drawText(margin, size - 18, 40, 16,
+            lbl_w = max(50, size // 3)
+            painter.drawText(margin, size - 18, lbl_w, 16,
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, txt_min)
-            painter.drawText(size - margin - 40, size - 18, 40, 16,
+            painter.drawText(size - margin - lbl_w, size - 18, lbl_w, 16,
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, txt_max)
 
         elif style == "Barra Horizontal":

@@ -124,13 +124,19 @@ def test_3_representation_decimal_prevention():
     assert tab.table_model.item(0, 3).text() == "11111111"
     assert len(tab.table_model.item(0, 3).text()) == 8
 
+    # Alterna para DEC
+    tab.toggle_display_format()
+    assert tab.display_format == "DEC"
+    assert tab.table_model.item(0, 2).text() == "10"
+    assert tab.table_model.item(0, 3).text() == "255"
+
     # Alterna de volta para HEX
     tab.toggle_display_format()
     assert tab.display_format == "HEX"
     assert tab.table_model.item(0, 2).text() == "0A"
     assert tab.table_model.item(0, 3).text() == "FF"
 
-    print("    [OK] Representação segura em HEX e BIN sem desvios para decimal!")
+    print("    [OK] Representação segura em HEX, BIN e DEC sem desvios para decimal!")
 
 
 def test_4_import_cwp_cross_platform_annotations():

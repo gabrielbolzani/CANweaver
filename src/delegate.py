@@ -23,6 +23,10 @@ from PyQt6.QtGui import QPainter, QColor, QFont, QPen
 class CANItemDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.highlight_changes = True
+
+    def set_highlight_changes(self, enabled: bool):
+        self.highlight_changes = bool(enabled)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         is_annotated = index.data(Qt.ItemDataRole.UserRole + 1)
@@ -76,7 +80,7 @@ class CANItemDelegate(QStyledItemDelegate):
                                  int(start_y), int(square_size), int(square_size))
 
                 bit_val = text[i]
-                changed = (bit_val != old_bin[i])
+                changed = (bit_val != old_bin[i]) and getattr(self, "highlight_changes", True)
 
                 bg_color_name = bg_brush.color().name() if bg_brush else ""
 

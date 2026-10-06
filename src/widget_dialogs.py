@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox,
     QSpinBox, QDoubleSpinBox, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QCheckBox,
-    QColorDialog, QFrame, QSizePolicy, QWidget, QScrollArea, QGroupBox
+    QColorDialog, QFrame, QSizePolicy, QWidget, QScrollArea, QGroupBox, QTabWidget
 )
 from PyQt6.QtGui import QColor
 
@@ -481,19 +481,107 @@ class ControllerDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# GaugeDialog
+# GaugeDialog & CAN Signal Helpers
 # ---------------------------------------------------------------------------
 
+def parse_factor_str(s: str | float | int) -> float:
+    """Converte string de fator (ex: '0.125', '1/256', '/256', '0,05', 'x0.125') para float com segurança."""
+    if isinstance(s, (int, float)):
+        return float(s)
+    s_str = str(s).strip().replace(",", ".")
+    s_str = s_str.lstrip("*xX· ").strip()
+    if not s_str:
+        return 1.0
+    if "/" in s_str:
+        parts = s_str.split("/", 1)
+        try:
+            num_s = parts[0].strip()
+            num = float(num_s) if num_s else 1.0
+            den = float(parts[1].strip())
+            if den != 0.0:
+                return num / den
+        except ValueError:
+            pass
+    try:
+        return float(s_str)
+    except ValueError:
+        return 1.0
+
+
+def extract_can_signal(
+    payload: list[int],
+    start_byte: int = 0,
+    start_bit: int = 0,
+    bit_len: int = 8,
+    endianness: str = "little",
+    signed: bool = False
+) -> int:
+    """
+    Extrai sinal de até 64 bits de um payload CAN (0..8 bytes).
+    
+    start_byte: 0..7 (Byte inicial)
+    start_bit:  0..7 (bit inicial dentro do start_byte, 0 = LSB)
+    bit_len:    1..64 bits
+    endianness: 'little' (Intel / J1939) ou 'big' (Motorola)
+    signed:     se True, interpreta complemento de 2 (valores negativos)
+    """
+    if not payload:
+        return 0
+
+    data = [b & 0xFF for b in payload]
+    if len(data) < 8:
+        data = data + [0] * (8 - len(data))
+
+    bit_len = max(1, min(64, int(bit_len)))
+    start_byte = max(0, min(7, int(start_byte)))
+    start_bit = max(0, min(7, int(start_bit)))
+    endianness = str(endianness).lower()
+
+    if endianness == "little":
+        # Little-Endian (Intel / J1939): Byte 0 é LSB
+        global_bit = start_byte * 8 + start_bit
+        raw_64 = 0
+        for i, b in enumerate(data):
+            raw_64 |= b << (8 * i)
+        val = (raw_64 >> global_bit) & ((1 << bit_len) - 1)
+    else:
+        # Big-Endian (Motorola): Byte 0 é MSB
+        raw_64 = 0
+        for b in data:
+            raw_64 = (raw_64 << 8) | b
+        shift = 64 - (start_byte * 8 + start_bit + bit_len)
+        if shift >= 0:
+            val = (raw_64 >> shift) & ((1 << bit_len) - 1)
+        else:
+            val = (raw_64 << (-shift)) & ((1 << bit_len) - 1)
+
+    if signed:
+        sign_bit = 1 << (bit_len - 1)
+        if val & sign_bit:
+            val -= (1 << bit_len)
+
+    return val
+
+
 class GaugeDialog(QDialog):
-    """Diálogo de configuração para o Gauge (indicador analógico)."""
+    """Diálogo de configuração para o Gauge (indicador analógico / numérico)."""
 
     def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
         self.grid_size = _get_grid_size(parent, grid_size)
         self.setWindowTitle("Configurar Gauge")
-        self.resize(450, 480)
+        self.resize(590, 610)
 
-        layout = QFormLayout(self)
+        main_layout = QVBoxLayout(self)
+
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs, 1)
+
+        # ==========================================================
+        # ABA 1: Mostrador & Visual
+        # ==========================================================
+        tab_visual = QWidget()
+        form_visual = QFormLayout(tab_visual)
 
         self.txt_name = QLineEdit(config.get("name", "Meu Gauge") if config else "Meu Gauge")
 
@@ -501,46 +589,38 @@ class GaugeDialog(QDialog):
         self.cb_style.addItems(["Arco", "Barra Horizontal", "Barra Vertical", "Texto Apenas"])
         self.cb_style.setCurrentText(config.get("style", "Arco") if config else "Arco")
 
-        self.txt_can_id = QLineEdit(config.get("can_id", "111") if config else "111")
-        self.txt_can_id.setPlaceholderText("ID em HEX (ex: 111)")
-
-        self.sp_byte = QSpinBox()
-        self.sp_byte.setRange(0, 7)
-        self.sp_byte.setValue(config.get("byte", 0) if config else 0)
-
-        self.sp_byte_len = QSpinBox()
-        self.sp_byte_len.setRange(1, 4)
-        self.sp_byte_len.setValue(config.get("byte_len", 1) if config else 1)
-        self.sp_byte_len.setToolTip("Número de bytes consecutivos que formam o valor (1–4)")
+        can_id_def = config.get("can_id", "0CF00400" if not config else "111") if config else "111"
+        self.txt_can_id = QLineEdit(str(can_id_def))
+        self.txt_can_id.setPlaceholderText("ID em HEX (ex: 0CF00400 ou 111)")
 
         self.txt_unit = QLineEdit(config.get("unit", "") if config else "")
-        self.txt_unit.setPlaceholderText("Unidade (ex: km/h, °C, bar)")
+        self.txt_unit.setPlaceholderText("Unidade (ex: rpm, km/h, °C, %)")
+        self.txt_unit.textChanged.connect(self._update_all_previews)
 
-        # Raw values (Hex / Int)
-        self.sp_min_raw = QSpinBox()
-        self.sp_min_raw.setRange(-2147483648, 2147483647)
-        self.sp_min_raw.setValue(config.get("val_min_raw", 0) if config else 0)
+        # Faixa do mostrador
+        self.sp_display_min = QDoubleSpinBox()
+        self.sp_display_min.setRange(-9999999.0, 9999999.0)
+        self.sp_display_min.setDecimals(2)
+        disp_min_val = config.get("display_min", config.get("val_min_conv", 0.0)) if config else 0.0
+        self.sp_display_min.setValue(disp_min_val)
 
-        self.sp_max_raw = QSpinBox()
-        self.sp_max_raw.setRange(-2147483648, 2147483647)
-        self.sp_max_raw.setValue(config.get("val_max_raw", 255) if config else 255)
+        self.sp_display_max = QDoubleSpinBox()
+        self.sp_display_max.setRange(-9999999.0, 9999999.0)
+        self.sp_display_max.setDecimals(2)
+        disp_max_val = config.get("display_max", config.get("val_max_conv", 3000.0 if not config else 100.0)) if config else 100.0
+        self.sp_display_max.setValue(disp_max_val)
 
-        # Converted values (Float)
-        self.sp_min_conv = QDoubleSpinBox()
-        self.sp_min_conv.setRange(-9999999.0, 9999999.0)
-        self.sp_min_conv.setDecimals(4)
-        self.sp_min_conv.setValue(config.get("val_min_conv", 0.0) if config else 0.0)
-
-        self.sp_max_conv = QDoubleSpinBox()
-        self.sp_max_conv.setRange(-9999999.0, 9999999.0)
-        self.sp_max_conv.setDecimals(4)
-        self.sp_max_conv.setValue(config.get("val_max_conv", 100.0) if config else 100.0)
+        range_layout = QHBoxLayout()
+        range_layout.addWidget(QLabel("Mínimo:"))
+        range_layout.addWidget(self.sp_display_min)
+        range_layout.addWidget(QLabel("Máximo:"))
+        range_layout.addWidget(self.sp_display_max)
 
         self.chk_float = QCheckBox("Exibir casas decimais na tela")
         self.chk_float.setChecked(config.get("show_float", False) if config else False)
 
-        self.lbl_factor = QLabel("Fator: --")
-        self.lbl_factor.setStyleSheet("color: #a1a1aa; font-style: italic;")
+        self.chk_invert = QCheckBox("Inverter direção de crescimento gráfico")
+        self.chk_invert.setChecked(config.get("invert_direction", False) if config else False)
 
         self.sp_size = QSpinBox()
         self.sp_size.setRange(40, 600)
@@ -552,41 +632,244 @@ class GaugeDialog(QDialog):
         self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
         self.chk_snap_size.toggled.connect(self._on_snap_toggled)
 
-        self.chk_invert = QCheckBox("Inverter direção de crescimento")
-        self.chk_invert.setChecked(config.get("invert_direction", False) if config else False)
-        self.chk_invert.setToolTip("Inverte o sentido do preenchimento gráfico (o valor numérico não muda)")
+        # Cartão de resumo da decodificação ativa
+        self.lbl_signal_summary = QLabel()
+        self.lbl_signal_summary.setStyleSheet(
+            "QLabel { background-color: #27272a; color: #38bdf8; border: 1px solid #3f3f46; "
+            "border-radius: 6px; padding: 8px 12px; font-size: 11px; font-weight: bold; }"
+        )
+        self.lbl_signal_summary.setWordWrap(True)
 
-        layout.addRow("Nome:", self.txt_name)
-        layout.addRow("Estilo Visual:", self.cb_style)
-        layout.addRow("ID CAN (HEX):", self.txt_can_id)
-        layout.addRow("Byte Inicial:", self.sp_byte)
-        layout.addRow("Nº de Bytes:", self.sp_byte_len)
-        layout.addRow("Unidade:", self.txt_unit)
-        layout.addRow("Valor Inicial (HEX/INT):", self.sp_min_raw)
-        layout.addRow("Valor Final (HEX/INT):", self.sp_max_raw)
-        layout.addRow("Valor Inicial Convertido:", self.sp_min_conv)
-        layout.addRow("Valor Final Convertido:", self.sp_max_conv)
-        layout.addRow("", self.chk_float)
-        layout.addRow("", self.lbl_factor)
-        layout.addRow("Tamanho do Gauge:", self.sp_size)
-        layout.addRow("Snap de Tamanho:", self.chk_snap_size)
-        layout.addRow("", self.chk_invert)
+        form_visual.addRow("Nome do Widget:", self.txt_name)
+        form_visual.addRow("Estilo Visual:", self.cb_style)
+        form_visual.addRow("ID CAN (HEX):", self.txt_can_id)
+        form_visual.addRow("Unidade de Medida:", self.txt_unit)
+        form_visual.addRow("Faixa no Mostrador:", range_layout)
+        form_visual.addRow("", self.chk_float)
+        form_visual.addRow("", self.chk_invert)
+        form_visual.addRow("Tamanho:", self.sp_size)
+        form_visual.addRow("Snap de Grade:", self.chk_snap_size)
+        form_visual.addRow("Decodificação Ativa:", self.lbl_signal_summary)
 
+        self.tabs.addTab(tab_visual, "📊 Mostrador & Visual")
+
+        # ==========================================================
+        # ABA 2: Decodificação Avançada (J1939 / DBC / Bits)
+        # ==========================================================
+        tab_advanced = QWidget()
+        vbox_adv = QVBoxLayout(tab_advanced)
+        vbox_adv.setSpacing(10)
+
+        # 1. Modo de conversão
+        top_mode_box = QGroupBox("Modo de Conversão / Cálculo")
+        top_mode_layout = QVBoxLayout(top_mode_box)
+        self.cb_mode = QComboBox()
+        self.cb_mode.addItems([
+            "Fórmula Direta: (Raw × Fator) + Offset  [Padrão J1939 / DBC]",
+            "Escala por 2 Pontos (Min/Max Raw ➔ Min/Max Conv)  [Legado]"
+        ])
+        if config:
+            if "conversion_mode" in config:
+                is_two_point_init = (config.get("conversion_mode") == "two_point")
+            elif "factor" in config or "factor_str" in config:
+                is_two_point_init = False
+            else:
+                is_two_point_init = ("val_min_raw" in config)
+        else:
+            is_two_point_init = False
+        self.cb_mode.setCurrentIndex(1 if is_two_point_init else 0)
+        self.cb_mode.currentIndexChanged.connect(self._on_mode_changed)
+        top_mode_layout.addWidget(self.cb_mode)
+        vbox_adv.addWidget(top_mode_box)
+
+        # 2. Grupo Extração de Bits
+        bits_box = QGroupBox("Extração de Bits do Barramento CAN")
+        form_bits = QFormLayout(bits_box)
+
+        self.cb_endianness = QComboBox()
+        self.cb_endianness.addItems([
+            "Little-Endian (Intel / J1939 — LSB no Byte Inicial)",
+            "Big-Endian (Motorola — MSB no Byte Inicial)"
+        ])
+        default_endian = config.get("endianness", "big" if is_two_point_init else "little") if config else "little"
+        self.cb_endianness.setCurrentIndex(0 if default_endian == "little" else 1)
+        self.cb_endianness.currentIndexChanged.connect(self._update_all_previews)
+
+        self.sp_byte = QSpinBox()
+        self.sp_byte.setRange(0, 7)
+        self.sp_byte.setValue(config.get("start_byte", config.get("byte", 0)) if config else 0)
+        self.sp_byte.valueChanged.connect(self._update_all_previews)
+
+        self.sp_start_bit = QSpinBox()
+        self.sp_start_bit.setRange(0, 7)
+        self.sp_start_bit.setValue(config.get("start_bit", 0) if config else 0)
+        self.sp_start_bit.valueChanged.connect(self._update_all_previews)
+
+        self.lbl_global_bit = QLabel("Bit global: 0 (B0.0)")
+        self.lbl_global_bit.setStyleSheet("color: #a1a1aa; font-size: 11px;")
+
+        byte_bit_layout = QHBoxLayout()
+        byte_bit_layout.addWidget(QLabel("Byte (0–7):"))
+        byte_bit_layout.addWidget(self.sp_byte)
+        byte_bit_layout.addWidget(QLabel("Bit inicial (0–7):"))
+        byte_bit_layout.addWidget(self.sp_start_bit)
+        byte_bit_layout.addWidget(self.lbl_global_bit)
+        byte_bit_layout.addStretch()
+
+        self.sp_bit_length = QSpinBox()
+        self.sp_bit_length.setRange(1, 64)
+        def_bits = config.get("bit_length", config.get("byte_len", 1) * 8) if config else 16
+        self.sp_bit_length.setValue(def_bits)
+        self.sp_bit_length.valueChanged.connect(self._update_all_previews)
+
+        btn_8b = QPushButton("8 bits (1B)")
+        btn_8b.clicked.connect(lambda: self.sp_bit_length.setValue(8))
+        btn_16b = QPushButton("16 bits (2B)")
+        btn_16b.clicked.connect(lambda: self.sp_bit_length.setValue(16))
+        btn_24b = QPushButton("24 bits (3B)")
+        btn_24b.clicked.connect(lambda: self.sp_bit_length.setValue(24))
+        btn_32b = QPushButton("32 bits (4B)")
+        btn_32b.clicked.connect(lambda: self.sp_bit_length.setValue(32))
+
+        for btn in (btn_8b, btn_16b, btn_24b, btn_32b):
+            btn.setStyleSheet("background-color: #3f3f46; color: white; padding: 3px 8px; border-radius: 3px; font-size: 11px;")
+
+        bit_len_layout = QHBoxLayout()
+        bit_len_layout.addWidget(self.sp_bit_length)
+        bit_len_layout.addWidget(btn_8b)
+        bit_len_layout.addWidget(btn_16b)
+        bit_len_layout.addWidget(btn_24b)
+        bit_len_layout.addWidget(btn_32b)
+        bit_len_layout.addStretch()
+
+        self.cb_signed = QComboBox()
+        self.cb_signed.addItems(["Sem Sinal (Unsigned — positivo)", "Com Sinal (Signed — Complemento de 2)"])
+        self.cb_signed.setCurrentIndex(1 if (config and config.get("is_signed", False)) else 0)
+        self.cb_signed.currentIndexChanged.connect(self._update_all_previews)
+
+        form_bits.addRow("Ordem dos Bytes (Endianness):", self.cb_endianness)
+        form_bits.addRow("Posição Inicial:", byte_bit_layout)
+        form_bits.addRow("Quantidade de Bits:", bit_len_layout)
+        form_bits.addRow("Tipo Numérico:", self.cb_signed)
+        vbox_adv.addWidget(bits_box)
+
+        # 3. Grupo Fórmula Direta
+        self.formula_box = QGroupBox("Fórmula de Conversão Direta")
+        form_formula = QFormLayout(self.formula_box)
+
+        # Atalhos rápidos para sinais clássicos J1939
+        btn_preset_rpm = QPushButton("RPM (×0.125)")
+        btn_preset_speed = QPushButton("Velocidade (1/256)")
+        btn_preset_temp = QPushButton("Temp (°C, -40)")
+        btn_preset_torque = QPushButton("Torque (% -125)")
+
+        def _apply_preset(factor_s, offset_v, unit_s, min_d, max_d):
+            self.txt_factor.setText(factor_s)
+            self.sp_offset.setValue(offset_v)
+            if not self.txt_unit.text().strip():
+                self.txt_unit.setText(unit_s)
+            if self.sp_display_max.value() == 100.0 and self.sp_display_min.value() == 0.0:
+                self.sp_display_min.setValue(min_d)
+                self.sp_display_max.setValue(max_d)
+            self._update_all_previews()
+
+        btn_preset_rpm.clicked.connect(lambda: _apply_preset("0.125", 0.0, "rpm", 0.0, 3000.0))
+        btn_preset_speed.clicked.connect(lambda: _apply_preset("1/256", 0.0, "km/h", 0.0, 50.0))
+        btn_preset_temp.clicked.connect(lambda: _apply_preset("1.0", -40.0, "°C", 0.0, 120.0))
+        btn_preset_torque.clicked.connect(lambda: _apply_preset("1.0", -125.0, "%", -125.0, 125.0))
+
+        presets_layout = QHBoxLayout()
+        for b in (btn_preset_rpm, btn_preset_speed, btn_preset_temp, btn_preset_torque):
+            b.setStyleSheet("background-color: #27272a; color: #38bdf8; border: 1px solid #3f3f46; border-radius: 3px; padding: 3px 6px; font-size: 10px; font-weight: bold;")
+            presets_layout.addWidget(b)
+        presets_layout.addStretch()
+        form_formula.addRow("Atalhos J1939:", presets_layout)
+
+        factor_init = str(config.get("factor_str", config.get("factor", "0.125" if not config else "1.0"))) if config else "0.125"
+        self.txt_factor = QLineEdit(factor_init)
+        self.txt_factor.setPlaceholderText("ex: 0.125 ou 1/256")
+        self.txt_factor.textChanged.connect(self._update_all_previews)
+
+        self.sp_offset = QDoubleSpinBox()
+        self.sp_offset.setRange(-9999999.0, 9999999.0)
+        self.sp_offset.setDecimals(4)
+        self.sp_offset.setValue(config.get("offset", 0.0) if config else 0.0)
+        self.sp_offset.valueChanged.connect(self._update_all_previews)
+
+        self.lbl_formula_display = QLabel("Fórmula: Valor = (Raw × 1.0) + 0.0")
+        self.lbl_formula_display.setStyleSheet("color: #10b981; font-weight: bold; font-size: 12px;")
+
+        # Simulador de teste interativo
+        sim_layout = QHBoxLayout()
+        self.sp_sim_raw = QSpinBox()
+        self.sp_sim_raw.setRange(-2147483648, 2147483647)
+        self.sp_sim_raw.setValue(7200)
+        self.sp_sim_raw.valueChanged.connect(self._update_all_previews)
+        self.lbl_sim_result = QLabel("➔ 900.00")
+        self.lbl_sim_result.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 12px;")
+        sim_layout.addWidget(QLabel("Teste com Raw:"))
+        sim_layout.addWidget(self.sp_sim_raw)
+        sim_layout.addWidget(self.lbl_sim_result)
+        sim_layout.addStretch()
+
+        form_formula.addRow("Fator (Multiplicador):", self.txt_factor)
+        form_formula.addRow("Offset (Deslocamento):", self.sp_offset)
+        form_formula.addRow("Fórmula Resultante:", self.lbl_formula_display)
+        form_formula.addRow("Simulador Rápido:", sim_layout)
+        vbox_adv.addWidget(self.formula_box)
+
+        # 4. Grupo Escala por 2 Pontos (Legado)
+        self.two_point_box = QGroupBox("Escala por Dois Pontos (Modo Legado)")
+        form_two_point = QFormLayout(self.two_point_box)
+
+        self.sp_min_raw = QSpinBox()
+        self.sp_min_raw.setRange(-2147483648, 2147483647)
+        self.sp_min_raw.setValue(config.get("val_min_raw", 0) if config else 0)
+        self.sp_min_raw.valueChanged.connect(self._update_all_previews)
+
+        self.sp_max_raw = QSpinBox()
+        self.sp_max_raw.setRange(-2147483648, 2147483647)
+        self.sp_max_raw.setValue(config.get("val_max_raw", 255) if config else 255)
+        self.sp_max_raw.valueChanged.connect(self._update_all_previews)
+
+        self.sp_min_conv = QDoubleSpinBox()
+        self.sp_min_conv.setRange(-9999999.0, 9999999.0)
+        self.sp_min_conv.setDecimals(4)
+        self.sp_min_conv.setValue(config.get("val_min_conv", 0.0) if config else 0.0)
+        self.sp_min_conv.valueChanged.connect(self._update_all_previews)
+
+        self.sp_max_conv = QDoubleSpinBox()
+        self.sp_max_conv.setRange(-9999999.0, 9999999.0)
+        self.sp_max_conv.setDecimals(4)
+        self.sp_max_conv.setValue(config.get("val_max_conv", 100.0) if config else 100.0)
+        self.sp_max_conv.valueChanged.connect(self._update_all_previews)
+
+        self.lbl_two_point_factor = QLabel("Fator calculado: --")
+        self.lbl_two_point_factor.setStyleSheet("color: #a1a1aa; font-style: italic;")
+
+        form_two_point.addRow("Valor Inicial Raw:", self.sp_min_raw)
+        form_two_point.addRow("Valor Final Raw:", self.sp_max_raw)
+        form_two_point.addRow("Valor Inicial Convertido:", self.sp_min_conv)
+        form_two_point.addRow("Valor Final Convertido:", self.sp_max_conv)
+        form_two_point.addRow("", self.lbl_two_point_factor)
+        vbox_adv.addWidget(self.two_point_box)
+
+        self.tabs.addTab(tab_advanced, "⚙️ Decodificação Avançada (J1939 / Bits)")
+
+        # Botões inferiores
         btn_layout = QHBoxLayout()
-        btn_ok = QPushButton("Salvar")
+        btn_ok = QPushButton("Salvar Configurações")
+        btn_ok.setStyleSheet("QPushButton { background-color: #10b981; color: white; padding: 6px 16px; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #059669; }")
         btn_ok.clicked.connect(self._validate_and_accept)
         btn_cancel = QPushButton("Cancelar")
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addStretch()
         btn_layout.addWidget(btn_ok)
         btn_layout.addWidget(btn_cancel)
-        layout.addRow(btn_layout)
+        main_layout.addLayout(btn_layout)
 
-        self.sp_min_raw.valueChanged.connect(self._update_factor)
-        self.sp_max_raw.valueChanged.connect(self._update_factor)
-        self.sp_min_conv.valueChanged.connect(self._update_factor)
-        self.sp_max_conv.valueChanged.connect(self._update_factor)
-        self._update_factor()
+        self._on_mode_changed(self.cb_mode.currentIndex())
+        self._update_all_previews()
 
         if self.chk_snap_size.isChecked():
             self._on_snap_toggled(True)
@@ -599,48 +882,133 @@ class GaugeDialog(QDialog):
         else:
             self.sp_size.setSingleStep(10)
 
-    def _update_factor(self):
-        d_raw = self.sp_max_raw.value() - self.sp_min_raw.value()
-        d_conv = self.sp_max_conv.value() - self.sp_min_conv.value()
-        if d_raw == 0:
-            self.lbl_factor.setText("Fator: N/A (delta zero)")
+    def _on_mode_changed(self, idx: int):
+        is_factor = (idx == 0)
+        self.formula_box.setVisible(is_factor)
+        self.two_point_box.setVisible(not is_factor)
+        self._update_all_previews()
+
+    def _update_all_previews(self):
+        s_byte = self.sp_byte.value()
+        s_bit = self.sp_start_bit.value()
+        global_bit = s_byte * 8 + s_bit
+        self.lbl_global_bit.setText(f"Bit global: {global_bit} (B{s_byte}.{s_bit})")
+
+        unit = self.txt_unit.text().strip()
+        unit_str = f" {unit}" if unit else ""
+
+        is_factor = (self.cb_mode.currentIndex() == 0)
+        if is_factor:
+            factor = parse_factor_str(self.txt_factor.text())
+            offset = self.sp_offset.value()
+            sign_str = f"+ {offset:g}" if offset >= 0 else f"- {abs(offset):g}"
+            self.lbl_formula_display.setText(f"Fórmula: Valor = (Raw × {factor:g}) {sign_str}{unit_str}")
+
+            sim_raw = self.sp_sim_raw.value()
+            sim_val = (sim_raw * factor) + offset
+            self.lbl_sim_result.setText(f"➔ {sim_val:.2f}{unit_str}")
         else:
-            self.lbl_factor.setText(f"Fator de conversão: {d_conv / d_raw:.4f}")
+            d_raw = self.sp_max_raw.value() - self.sp_min_raw.value()
+            d_conv = self.sp_max_conv.value() - self.sp_min_conv.value()
+            if d_raw == 0:
+                self.lbl_two_point_factor.setText("Fator: N/A (delta zero)")
+            else:
+                self.lbl_two_point_factor.setText(f"Fator de conversão: {d_conv / d_raw:.4f}")
+
+        # Resumo da configuração
+        endian_str = "Intel (Little-Endian)" if self.cb_endianness.currentIndex() == 0 else "Motorola (Big-Endian)"
+        bits_str = f"{self.sp_bit_length.value()} bits"
+        byte_str = f"B{s_byte}" if s_bit == 0 else f"B{s_byte}.{s_bit}"
+        if is_factor:
+            factor = parse_factor_str(self.txt_factor.text())
+            offset = self.sp_offset.value()
+            sign_text = f"+{offset:g}" if offset >= 0 else f"{offset:g}"
+            self.lbl_signal_summary.setText(
+                f"📌 {endian_str} | {byte_str} ({bits_str}) | Fator: {factor:g} | Offset: {sign_text}{unit_str}"
+            )
+        else:
+            self.lbl_signal_summary.setText(
+                f"📌 {endian_str} | {byte_str} ({bits_str}) | 2 Pontos ({self.sp_min_raw.value()}➔{self.sp_min_conv.value()})"
+            )
 
     def _validate_and_accept(self):
         try:
             int(self.txt_can_id.text().strip(), 16)
         except ValueError:
-            QMessageBox.warning(self, "Erro", "ID CAN deve ser hexadecimal.")
+            QMessageBox.warning(self, "Erro", "ID CAN deve ser um valor hexadecimal válido (ex: 0CF00400 ou 18FEF147).")
             return
-        if self.sp_min_raw.value() == self.sp_max_raw.value():
-            QMessageBox.warning(self, "Erro", "O valor inicial e final raw não podem ser iguais.")
-            return
+        if self.cb_mode.currentIndex() == 1:
+            if self.sp_min_raw.value() == self.sp_max_raw.value():
+                QMessageBox.warning(self, "Erro", "No modo 2 pontos, o valor inicial e final raw não podem ser iguais.")
+                return
         self.accept()
 
     def get_config(self):
         can_id_text = self.txt_can_id.text().strip()
         try:
-            can_id_str = f"{int(can_id_text, 16):03X}"
+            can_id_int = int(can_id_text, 16) if not can_id_text.lower().startswith("0x") else int(can_id_text, 0)
+            if can_id_int <= 0x7FF:
+                can_id_str = f"{can_id_int:03X}"
+            else:
+                can_id_str = f"{can_id_int:08X}"
         except ValueError:
             can_id_str = can_id_text.upper().replace("0X", "")
+
+        is_factor_mode = (self.cb_mode.currentIndex() == 0)
+        factor_val = parse_factor_str(self.txt_factor.text())
+        offset_val = self.sp_offset.value()
+
+        endianness_val = "little" if self.cb_endianness.currentIndex() == 0 else "big"
+        start_byte_val = self.sp_byte.value()
+        start_bit_val = self.sp_start_bit.value()
+        bit_len_val = self.sp_bit_length.value()
+        is_signed_val = (self.cb_signed.currentIndex() == 1)
+
+        disp_min = self.sp_display_min.value()
+        disp_max = self.sp_display_max.value()
+
+        raw_min = self.sp_min_raw.value()
+        raw_max = self.sp_max_raw.value()
+        conv_min = self.sp_min_conv.value()
+        conv_max = self.sp_max_conv.value()
 
         return {
             "type": "gauge",
             "name": self.txt_name.text().strip(),
             "style": self.cb_style.currentText(),
             "can_id": can_id_str,
-            "byte": self.sp_byte.value(),
-            "byte_len": self.sp_byte_len.value(),
             "unit": self.txt_unit.text().strip(),
-            "val_min_raw": self.sp_min_raw.value(),
-            "val_max_raw": self.sp_max_raw.value(),
-            "val_min_conv": self.sp_min_conv.value(),
-            "val_max_conv": self.sp_max_conv.value(),
-            "show_float": self.chk_float.isChecked(),
             "gauge_size": self.sp_size.value(),
             "snap_size": self.chk_snap_size.isChecked(),
             "invert_direction": self.chk_invert.isChecked(),
+            "show_float": self.chk_float.isChecked(),
+
+            # Modo de conversão
+            "conversion_mode": "factor_offset" if is_factor_mode else "two_point",
+
+            # Decodificação avançada de bits
+            "endianness": endianness_val,
+            "start_byte": start_byte_val,
+            "start_bit": start_bit_val,
+            "bit_length": bit_len_val,
+            "is_signed": is_signed_val,
+
+            # Fórmula direta
+            "factor": factor_val,
+            "factor_str": self.txt_factor.text().strip(),
+            "offset": offset_val,
+
+            # Faixa do mostrador
+            "display_min": disp_min,
+            "display_max": disp_max,
+
+            # Retrocompatibilidade (modo legado 2 pontos e byte/byte_len)
+            "byte": start_byte_val,
+            "byte_len": max(1, (bit_len_val + 7) // 8),
+            "val_min_raw": raw_min,
+            "val_max_raw": raw_max,
+            "val_min_conv": disp_min if is_factor_mode else conv_min,
+            "val_max_conv": disp_max if is_factor_mode else conv_max,
         }
 
 
@@ -685,7 +1053,7 @@ class _StateRow:
     """Agrupa os widgets de uma linha de estado no MultiIndicatorDialog."""
 
     def __init__(self, parent_layout, label: str, color: str,
-                 pattern: list, fmt: str):
+                 pattern: list, fmt: str, aux_text: str = ''):
         self.fmt = fmt
         self.destroyed = False
 
@@ -698,8 +1066,12 @@ class _StateRow:
         self.txt_label.setPlaceholderText('Nome do estado')
         self.txt_label.setFixedWidth(110)
 
+        self.txt_aux = QLineEdit(aux_text)
+        self.txt_aux.setPlaceholderText('Texto auxiliar (opcional)')
+        self.txt_aux.setMinimumWidth(130)
+
         self.btn_color = _color_preview_btn(color, color)
-        self.btn_color.setFixedWidth(80)
+        self.btn_color.setFixedWidth(75)
         self.btn_color.clicked.connect(lambda: self._pick_color())
 
         self.txt_pattern = QLineEdit(_format_pattern(pattern, fmt))
@@ -709,20 +1081,21 @@ class _StateRow:
             "'xx' = qualquer valor (don't care).\n"
             "Exemplo HEX: 01 xx FF xx xx xx xx xx\n"
             "Exemplo BIN: 00000001 xxxxxxxx xxxxxxxx ...\n"
-            "O primeiro estado que casar com o payload recebido e exibido."
+            "O primeiro estado que casar com o payload recebido é exibido."
         )
 
-        btn_del = QPushButton('x')
+        btn_del = QPushButton('✕')
         btn_del.setFixedSize(26, 26)
         btn_del.setStyleSheet(
-            'QPushButton { background-color: #7f1d1d; color: white; border-radius: 4px; }'
+            'QPushButton { background-color: #7f1d1d; color: white; border-radius: 4px; font-weight: bold; }'
             'QPushButton:hover { background-color: #b91c1c; }'
         )
         btn_del.clicked.connect(lambda: self._remove(row_widget, parent_layout))
 
         row_layout.addWidget(self.txt_label)
+        row_layout.addWidget(self.txt_aux, 1)
         row_layout.addWidget(self.btn_color)
-        row_layout.addWidget(self.txt_pattern, 1)
+        row_layout.addWidget(self.txt_pattern, 2)
         row_layout.addWidget(btn_del)
 
         self.row_widget = row_widget
@@ -747,28 +1120,29 @@ class _StateRow:
     def get_state(self) -> dict:
         return {
             'label': self.txt_label.text().strip(),
+            'aux_text': self.txt_aux.text().strip(),
             'color': self.btn_color._color,
             'pattern': _parse_pattern(self.txt_pattern.text(), self.fmt),
         }
 
     def is_alive_and_valid(self) -> bool:
-        return (not self.destroyed) and bool(self.txt_label.text().strip())
+        return (not self.destroyed) and bool(self.txt_label.text().strip() or self.txt_aux.text().strip())
 
 
 class MultiIndicatorDialog(QDialog):
     """
-    Dialogo para o Indicador Multi-Estado (Beta).
+    Diálogo para o Indicador Multi-Estado.
 
-    Permite criar N estados com nome, cor e padrao de bytes.
-    Suporta HEX e BIN. 'xx' / 'xxxxxxxx' = don't care (byte ignorado na comparacao).
-    O primeiro estado cujo padrao casar com o payload recebido e exibido.
+    Permite criar N estados com nome, texto auxiliar, cor e padrão de bytes.
+    Suporta HEX e BIN. 'xx' / 'xxxxxxxx' = don't care (byte ignorado na comparação).
+    O primeiro estado cujo padrão casar com o payload recebido é exibido.
     """
 
     def __init__(self, parent=None, config=None, grid_size=None, *args, **kwargs):
         super().__init__(parent)
         self.grid_size = _get_grid_size(parent, grid_size)
-        self.setWindowTitle('Configurar Indicador Multi-Estado (Beta)')
-        self.resize(640, 540)
+        self.setWindowTitle('Configurar Indicador Multi-Estado')
+        self.resize(760, 560)
         self._state_rows = []
         self._fmt = config.get('pattern_format', 'HEX') if config else 'HEX'
 
@@ -799,15 +1173,22 @@ class MultiIndicatorDialog(QDialog):
         self.cb_fmt.currentTextChanged.connect(self._on_fmt_changed)
 
         default_lbl   = config.get('default_label', '??') if config else '??'
+        default_aux   = config.get('default_aux_text', '') if config else ''
         default_color = config.get('default_color', '#52525b') if config else '#52525b'
         self.txt_default_label = QLineEdit(default_lbl)
-        self.txt_default_label.setPlaceholderText('Texto quando nenhum estado casa')
+        self.txt_default_label.setPlaceholderText('Nome padrão')
+        self.txt_default_label.setFixedWidth(110)
+
+        self.txt_default_aux = QLineEdit(default_aux)
+        self.txt_default_aux.setPlaceholderText('Texto auxiliar padrão (opcional)')
+
         self.btn_default_color = _color_preview_btn(default_color, default_color)
-        self.btn_default_color.setFixedWidth(80)
+        self.btn_default_color.setFixedWidth(75)
         self.btn_default_color.clicked.connect(lambda: self._pick_default_color())
 
         default_row_layout = QHBoxLayout()
         default_row_layout.addWidget(self.txt_default_label)
+        default_row_layout.addWidget(self.txt_default_aux, 1)
         default_row_layout.addWidget(self.btn_default_color)
 
         form.addRow('Nome:', self.txt_name)
@@ -815,23 +1196,15 @@ class MultiIndicatorDialog(QDialog):
         form.addRow('Tipo Visual:', self.cb_visual)
         form.addRow('Tamanho LED:', self.sp_led_size)
         form.addRow('Snap de Tamanho:', self.chk_snap_size)
-        form.addRow('Formato do padrao:', self.cb_fmt)
-        form.addRow('Estado padrao (label + cor):', default_row_layout)
+        form.addRow('Formato do padrão:', self.cb_fmt)
+        form.addRow('Estado padrão (nome + aux + cor):', default_row_layout)
         outer.addLayout(form)
 
         if self.chk_snap_size.isChecked():
             self._on_snap_toggled(True)
 
-    def _on_snap_toggled(self, checked: bool):
-        if checked:
-            val = round(self.sp_led_size.value() / self.grid_size) * self.grid_size
-            self.sp_led_size.setValue(max(self.grid_size, val))
-            self.sp_led_size.setSingleStep(self.grid_size)
-        else:
-            self.sp_led_size.setSingleStep(4)
-
         hdr_layout = QHBoxLayout()
-        lbl_h = QLabel('Estados  (ordem importa: primeiro que casar e exibido)')
+        lbl_h = QLabel('Estados  (ordem importa: primeiro que casar é exibido)')
         lbl_h.setStyleSheet('font-weight: bold; margin-top: 6px;')
         tip = QLabel("  xx = don't care")
         tip.setStyleSheet('color: #a1a1aa; font-size: 11px;')
@@ -841,35 +1214,53 @@ class MultiIndicatorDialog(QDialog):
         outer.addLayout(hdr_layout)
 
         col_hdr = QHBoxLayout()
-        for txt, fixed in [('Nome', 110), ('Cor', 80), ('Padrao de bytes (B0 B1 B2 B3 B4 B5 B6 B7)', -1), ('', 26)]:
+        for txt, stretch, fixed in [
+            ('Nome do Estado', 0, 110),
+            ('Texto Auxiliar (Subtítulo)', 1, -1),
+            ('Cor', 0, 75),
+            ('Padrão de bytes (B0 B1 B2 B3 B4 B5 B6 B7)', 2, -1),
+            ('', 0, 26)
+        ]:
             lbl = QLabel(txt)
             lbl.setStyleSheet('color: #71717a; font-size: 10px;')
             if fixed > 0:
                 lbl.setFixedWidth(fixed)
-            col_hdr.addWidget(lbl, 0 if fixed > 0 else 1)
+            col_hdr.addWidget(lbl, stretch)
         outer.addLayout(col_hdr)
 
-        self.states_area = QVBoxLayout()
-        self.states_area.setSpacing(2)
+        # Área de estados com barra de rolagem (ScrollArea)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; }")
+
         states_container = QWidget()
-        states_container.setLayout(self.states_area)
-        outer.addWidget(states_container, 1)
+        states_container.setStyleSheet("background-color: transparent;")
+        self.states_area = QVBoxLayout(states_container)
+        self.states_area.setSpacing(4)
+        self.states_area.setContentsMargins(0, 0, 0, 0)
+        scroll.setWidget(states_container)
+        outer.addWidget(scroll, 1)
 
         if config and config.get('states'):
             for st in config['states']:
-                self._add_state_row(st.get('label', ''), st.get('color', '#10b981'),
-                                    st.get('pattern', [None]*8))
+                self._add_state_row(
+                    st.get('label', ''),
+                    st.get('color', '#10b981'),
+                    st.get('pattern', [None]*8),
+                    st.get('aux_text', '')
+                )
         else:
-            self._add_state_row('Estado 0', '#52525b', [0] + [None]*7)
-            self._add_state_row('Estado 1', '#10b981', [1] + [None]*7)
+            self._add_state_row('Estado 0', '#52525b', [0] + [None]*7, 'Desligado')
+            self._add_state_row('Estado 1', '#10b981', [1] + [None]*7, 'Ligado')
 
         btn_add = QPushButton('+ Adicionar Estado')
         btn_add.setStyleSheet(
-            'QPushButton { background-color: #1e3a5f; color: white; padding: 5px 14px;'
-            ' border-radius: 4px; }'
+            'QPushButton { background-color: #1e3a5f; color: white; padding: 6px 14px;'
+            ' border-radius: 4px; font-weight: bold; }'
             'QPushButton:hover { background-color: #1d4ed8; }'
         )
-        btn_add.clicked.connect(lambda: self._add_state_row('Novo Estado', '#3b82f6', [None]*8))
+        btn_add.clicked.connect(lambda: self._add_state_row('Novo Estado', '#3b82f6', [None]*8, ''))
         outer.addWidget(btn_add)
 
         sep = QFrame()
@@ -879,6 +1270,7 @@ class MultiIndicatorDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_ok = QPushButton('Salvar')
+        btn_ok.setStyleSheet('QPushButton { background-color: #10b981; color: white; padding: 6px 16px; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #059669; }')
         btn_ok.clicked.connect(self._validate_and_accept)
         btn_cancel = QPushButton('Cancelar')
         btn_cancel.clicked.connect(self.reject)
@@ -890,8 +1282,16 @@ class MultiIndicatorDialog(QDialog):
         self.cb_visual.currentTextChanged.connect(self._update_led_visibility)
         self._update_led_visibility(self.cb_visual.currentText())
 
-    def _add_state_row(self, label: str, color: str, pattern: list):
-        row = _StateRow(self.states_area, label, color, pattern, self._fmt)
+    def _on_snap_toggled(self, checked: bool):
+        if checked:
+            val = round(self.sp_led_size.value() / self.grid_size) * self.grid_size
+            self.sp_led_size.setValue(max(self.grid_size, val))
+            self.sp_led_size.setSingleStep(self.grid_size)
+        else:
+            self.sp_led_size.setSingleStep(4)
+
+    def _add_state_row(self, label: str, color: str, pattern: list, aux_text: str = ''):
+        row = _StateRow(self.states_area, label, color, pattern, self._fmt, aux_text)
         self._state_rows.append(row)
 
     def _pick_default_color(self):
@@ -937,6 +1337,7 @@ class MultiIndicatorDialog(QDialog):
             'pattern_format': self._fmt,
             'states': [r.get_state() for r in valid],
             'default_label': self.txt_default_label.text().strip(),
+            'default_aux_text': self.txt_default_aux.text().strip(),
             'default_color': self.btn_default_color._color,
         }
 

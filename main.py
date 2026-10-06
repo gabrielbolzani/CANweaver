@@ -92,7 +92,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QIcon
 
 from src.worker import CANWorker
-from src.dialogs import ConnectionDialog, AboutDialog, BusDiscoveryDialog, bring_up_socketcan
+from src.dialogs import ConnectionDialog, AboutDialog, BusDiscoveryDialog, SocketCANConfigDialog, bring_up_socketcan
 from src.annotations import AnnotationManager
 from src.analysis_tab import AnalysisTab
 from src.transmit_tab import TransmitTab
@@ -914,7 +914,28 @@ class MainWindow(QMainWindow):
             self.can_thread.playback_transmit = config.get("playback_transmit", False)
             self.can_thread.playback_loop = self.btn_player_loop.isChecked() if hasattr(self, "btn_player_loop") else False
             self.can_thread.playback_speed = 1.0
-            self.lbl_status.setText(f"Playback: {os.path.basename(config['playback_file'])}")
+            self.can_thread.playback_byte_format_config = config.get("playback_byte_format", "AUTO")
+
+            if self.can_thread.playback_transmit:
+                if config.get("interface") == "socketcan":
+                    bring_up_socketcan(config.get("channel", "can0"), config.get("bitrate", 500000), listen_only=False)
+                try:
+                    self.can_thread.bus = can.Bus(
+                        interface=config["interface"],
+                        channel=config["channel"],
+                        bitrate=config["bitrate"]
+                    )
+                    self.lbl_status.setText(f"Playback (Tx {config['channel']}): {os.path.basename(config['playback_file'])}")
+                except Exception as e:
+                    QMessageBox.warning(
+                        self, "Aviso de Transmissão",
+                        f"Não foi possível abrir a interface {config.get('channel')} para transmissão:\n{e}\n\nO playback continuará apenas em modo visualização."
+                    )
+                    self.can_thread.playback_transmit = False
+                    self.can_thread.bus = None
+                    self.lbl_status.setText(f"Playback: {os.path.basename(config['playback_file'])}")
+            else:
+                self.lbl_status.setText(f"Playback: {os.path.basename(config['playback_file'])}")
         else:
             self.lbl_status.setText("Simulado")
 

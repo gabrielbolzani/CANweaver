@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QTableView, QPushButton,
     QTextEdit, QLabel, QHeaderView, QMenu, QCheckBox, QLineEdit,
     QComboBox, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
-    QFileDialog
+    QFileDialog, QApplication
 )
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QColor, QAction
 
@@ -80,9 +80,19 @@ class AnalysisTab(QWidget):
         left_layout = QVBoxLayout()
 
         control_layout = QHBoxLayout()
-        self.btn_format = QPushButton("Exibição: HEX")
-        self.btn_format.clicked.connect(self.toggle_display_format)
-        self.btn_format.setStyleSheet("background-color: #2e3035; color: white; padding: 6px 12px; border-radius: 4px;")
+        self.lbl_format = QLabel("Exibição:")
+        self.lbl_format.setStyleSheet("color: #a1a1aa; font-weight: bold;")
+
+        self.cb_format = QComboBox()
+        self.cb_format.addItems(["HEX", "BIN", "DEC"])
+        self.cb_format.setToolTip("Selecionar formato de exibição dos bytes na tabela (HEX, BIN ou DEC)")
+        self.cb_format.setStyleSheet(
+            "QComboBox { background-color: #2e3035; color: white; padding: 4px 10px; border-radius: 4px; font-weight: bold; border: 1px solid #3f3f46; }"
+            "QComboBox::drop-down { border: none; width: 18px; }"
+            "QComboBox QAbstractItemView { background-color: #202024; color: white; selection-background-color: #1e3a8a; }"
+        )
+        self.cb_format.currentTextChanged.connect(self.set_display_format)
+        self.btn_format = self.cb_format
 
         self.chk_hide_static = QCheckBox("Ocultar Estáticos")
         self.chk_hide_static.setStyleSheet("color: white;")
@@ -92,22 +102,25 @@ class AnalysisTab(QWidget):
         self.chk_fade.setChecked(True)
         self.chk_fade.setStyleSheet("color: white;")
 
+        self.chk_highlight_changes = QCheckBox("Destacar Mudanças")
+        self.chk_highlight_changes.setChecked(True)
+        self.chk_highlight_changes.setStyleSheet("color: white;")
+        self.chk_highlight_changes.setToolTip("Destacar alterações em tempo real (quadradinhos verdes nos bits)")
+        self.chk_highlight_changes.stateChanged.connect(self.toggle_highlight_changes)
+
         self.lbl_busload = QLabel("Busload: ---%")
         self.lbl_busload.setStyleSheet("color: #10b981; font-weight: bold; margin-left: 20px;")
 
         self.lbl_errors = QLabel("Erros CAN: 0")
         self.lbl_errors.setStyleSheet("color: #e83f5b; font-weight: bold; margin-left: 20px;")
 
-        self.lbl_id_count = QLabel("IDs no Barramento: 0")
-        self.lbl_id_count.setStyleSheet("color: #38bdf8; font-weight: bold; margin-left: 20px;")
-        self.lbl_id_count.setToolTip("Quantidade total de IDs CAN únicos detectados no barramento")
-
-        control_layout.addWidget(self.btn_format)
+        control_layout.addWidget(self.lbl_format)
+        control_layout.addWidget(self.cb_format)
         control_layout.addWidget(self.chk_fade)
         control_layout.addWidget(self.chk_hide_static)
+        control_layout.addWidget(self.chk_highlight_changes)
         control_layout.addWidget(self.lbl_busload)
         control_layout.addWidget(self.lbl_errors)
-        control_layout.addWidget(self.lbl_id_count)
         control_layout.addStretch()
         left_layout.addLayout(control_layout)
 
@@ -115,6 +128,7 @@ class AnalysisTab(QWidget):
         filter_layout = QHBoxLayout()
         self.txt_filter_id = QLineEdit()
         self.txt_filter_id.setPlaceholderText("Filtrar por ID (ex: 0C0)")
+        self.txt_filter_id.setClearButtonEnabled(True)
         self.txt_filter_id.textChanged.connect(self.apply_filters)
 
         self.cb_freq_op = QComboBox()
@@ -155,7 +169,8 @@ class AnalysisTab(QWidget):
             ["ID CAN", "Freq (Hz)", "B0", "B1", "B2", "B3", "B4", "B5", "B6", "B7"]
         )
         self.table_view.setModel(self.table_model)
-        self.table_view.setItemDelegate(CANItemDelegate(self.table_view))
+        self.item_delegate = CANItemDelegate(self.table_view)
+        self.table_view.setItemDelegate(self.item_delegate)
         self.table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table_view.customContextMenuRequested.connect(self.show_context_menu)
         self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -178,6 +193,8 @@ class AnalysisTab(QWidget):
         id_filter_btns_layout.addWidget(self.btn_deselect_all)
 
         self.list_ids = QListWidget()
+        self.list_ids.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_ids.customContextMenuRequested.connect(self.show_list_ids_context_menu)
         self.list_ids.itemChanged.connect(self.on_id_checkbox_changed)
 
         # Barra de pesquisa discreta na parte inferior da lista de IDs
@@ -218,6 +235,14 @@ class AnalysisTab(QWidget):
         self._error_count += 1
         self.lbl_errors.setText(f"Erros CAN: {self._error_count}")
 
+    def _format_byte(self, val: int) -> str:
+        b = val & 0xFF
+        if self.display_format == "BIN":
+            return f"{b:08b}"
+        elif self.display_format == "DEC":
+            return f"{b:d}"
+        return f"{b:02X}"
+
     @pyqtSlot(int, float, list)
     def process_can_frame(self, can_id: int, frequency: float, payload: list):
         bits = (44 + 8 * len(payload)) * 1.2
@@ -254,7 +279,7 @@ class AnalysisTab(QWidget):
             has_any_annot_in_row = bool(tt_id)
 
             for i, b in enumerate(payload_bytes):
-                item = QStandardItem(f"{b:02X}" if self.display_format == "HEX" else f"{b:08b}")
+                item = QStandardItem(self._format_byte(b))
                 item.setEditable(False)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setData(f"{b:08b}", Qt.ItemDataRole.UserRole)
@@ -293,19 +318,20 @@ class AnalysisTab(QWidget):
             b_val = payload_bytes[i]
             item = self.table_model.item(row_idx, i + 2)
             if item is None:
-                item = QStandardItem(f"{b_val:02X}" if self.display_format == "HEX" else f"{b_val:08b}")
+                item = QStandardItem(self._format_byte(b_val))
                 item.setEditable(False)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setData(f"{b_val:08b}", Qt.ItemDataRole.UserRole)
                 self.table_model.setItem(row_idx, i + 2, item)
 
             if db_entry["last_payload"][i] != b_val:
-                item.setText(f"{b_val:02X}" if self.display_format == "HEX" else f"{b_val:08b}")
+                item.setText(self._format_byte(b_val))
                 item.setData(f"{db_entry['last_payload'][i]:08b}", Qt.ItemDataRole.UserRole)
                 db_entry["last_change_time"][i] = current_time
                 db_entry["last_payload"][i] = b_val
-                item.setBackground(QColor("#1e3a8a"))
-                item.setForeground(QColor("#ffffff"))
+                if self.chk_highlight_changes.isChecked():
+                    item.setBackground(QColor("#1e3a8a"))
+                    item.setForeground(QColor("#ffffff"))
 
         db_entry["is_static"] = (current_time - max(db_entry["last_change_time"])) > 5.0
         self.update_row_visibility(hex_id)
@@ -425,6 +451,25 @@ class AnalysisTab(QWidget):
         self._update_id_counts()
 
     @pyqtSlot()
+    def toggle_highlight_changes(self):
+        enabled = self.chk_highlight_changes.isChecked()
+        if hasattr(self, "item_delegate") and self.item_delegate:
+            self.item_delegate.set_highlight_changes(enabled)
+        if not enabled:
+            for hex_id, info in self.can_database.items():
+                row_idx = info.get("row_index")
+                if row_idx is None:
+                    continue
+                for i in range(len(info.get("last_payload", []))):
+                    item = self.table_model.item(row_idx, i + 2)
+                    if item:
+                        bg = item.background()
+                        if bg and bg.color().name() == "#1e3a8a":
+                            item.setData(None, Qt.ItemDataRole.BackgroundRole)
+                            item.setData(None, Qt.ItemDataRole.ForegroundRole)
+        self.table_view.viewport().update()
+
+    @pyqtSlot()
     def select_all_ids(self):
         self.list_ids.blockSignals(True)
         for i in range(self.list_ids.count()):
@@ -449,27 +494,117 @@ class AnalysisTab(QWidget):
     # ------------------------------------------------------------------
     # Formato de exibição
     # ------------------------------------------------------------------
-    @pyqtSlot()
-    def toggle_display_format(self):
-        if self.display_format == "HEX":
-            self.display_format = "BIN"
-            self.btn_format.setText("Exibição: BIN")
-        else:
-            self.display_format = "HEX"
-            self.btn_format.setText("Exibição: HEX")
+    @pyqtSlot(str)
+    def set_display_format(self, format_name: str):
+        format_name = str(format_name).upper()
+        if format_name not in ("HEX", "BIN", "DEC"):
+            format_name = "HEX"
+        self.display_format = format_name
+
+        if hasattr(self, "cb_format") and self.cb_format.currentText() != self.display_format:
+            self.cb_format.blockSignals(True)
+            self.cb_format.setCurrentText(self.display_format)
+            self.cb_format.blockSignals(False)
 
         for hex_id, info in self.can_database.items():
-            row_idx = info["row_index"]
-            payload = info["last_payload"]
+            row_idx = info.get("row_index")
+            if row_idx is None:
+                continue
+            payload = info.get("last_payload", [])
             for i in range(len(payload)):
                 item = self.table_model.item(row_idx, i + 2)
                 if item:
-                    b_val = payload[i] & 0xFF
-                    item.setText(f"{b_val:02X}" if self.display_format == "HEX" else f"{b_val:08b}")
+                    item.setText(self._format_byte(payload[i]))
+        self.table_view.viewport().update()
+
+    @pyqtSlot()
+    def toggle_display_format(self):
+        order = ["HEX", "BIN", "DEC"]
+        cur_idx = order.index(self.display_format) if self.display_format in order else 0
+        next_format = order[(cur_idx + 1) % len(order)]
+        self.set_display_format(next_format)
 
     # ------------------------------------------------------------------
-    # Context menu e anotações
+    # Context menu, Cópia, Filtro e Anotações
     # ------------------------------------------------------------------
+    def copy_id_to_clipboard(self, hex_id: str):
+        """Copia o ID CAN para a área de transferência."""
+        QApplication.clipboard().setText(hex_id)
+
+    def copy_id_with_data_to_clipboard(self, hex_id: str):
+        """Copia o ID CAN junto com os bytes de dados atuais formatados."""
+        info = self.can_database.get(hex_id)
+        if not info:
+            QApplication.clipboard().setText(hex_id)
+            return
+
+        payload = info.get("last_payload", [])
+        if payload:
+            data_str = " ".join(self._format_byte(b) for b in payload)
+            text_to_copy = f"{hex_id}  {data_str}"
+        else:
+            text_to_copy = hex_id
+
+        QApplication.clipboard().setText(text_to_copy)
+
+    def copy_data_to_clipboard(self, hex_id: str):
+        """Copia apenas os bytes de dados atuais do ID CAN."""
+        info = self.can_database.get(hex_id)
+        if not info:
+            return
+
+        payload = info.get("last_payload", [])
+        if payload:
+            data_str = " ".join(self._format_byte(b) for b in payload)
+            QApplication.clipboard().setText(data_str)
+
+    def _show_id_actions_menu(self, can_id: str, target: str, global_pos: QPoint, index=None):
+        """Cria e exibe o menu de contexto com opções de filtro, cópia e anotação."""
+        menu = QMenu(self)
+
+        # 1. Filtro por este ID
+        action_filter = QAction(f"🔍 Filtrar por este ID ({can_id})", self)
+        action_filter.triggered.connect(lambda: self.apply_id_filter(can_id))
+        menu.addAction(action_filter)
+
+        if self.txt_filter_id.text().strip():
+            action_clear_filter = QAction("❌ Limpar Filtro de ID", self)
+            action_clear_filter.triggered.connect(lambda: self.apply_id_filter(""))
+            menu.addAction(action_clear_filter)
+
+        menu.addSeparator()
+
+        # 2. Cópia do ID e Dados
+        action_copy_id = QAction(f"📋 Copiar ID ({can_id})", self)
+        action_copy_id.triggered.connect(lambda: self.copy_id_to_clipboard(can_id))
+        menu.addAction(action_copy_id)
+
+        info = self.can_database.get(can_id, {})
+        payload = info.get("last_payload", [])
+        if payload:
+            data_str = " ".join(self._format_byte(b) for b in payload)
+            preview = data_str if len(data_str) <= 24 else data_str[:21] + "..."
+            action_copy_with_data = QAction(f"📋 Copiar com Dado Atual ({can_id}  {preview})", self)
+            action_copy_with_data.triggered.connect(lambda: self.copy_id_with_data_to_clipboard(can_id))
+            menu.addAction(action_copy_with_data)
+
+            action_copy_data = QAction(f"📋 Copiar Apenas Dado Atual ({preview})", self)
+            action_copy_data.triggered.connect(lambda: self.copy_data_to_clipboard(can_id))
+            menu.addAction(action_copy_data)
+        else:
+            action_copy_with_data = QAction(f"📋 Copiar com Dado Atual", self)
+            action_copy_with_data.triggered.connect(lambda: self.copy_id_with_data_to_clipboard(can_id))
+            menu.addAction(action_copy_with_data)
+
+        menu.addSeparator()
+
+        # 3. Comentários / Anotações
+        action_comment = QAction(f"💬 Adicionar Comentário em {target}...", self)
+        action_comment.triggered.connect(lambda: self.add_comment(can_id, target, index))
+        menu.addAction(action_comment)
+
+        menu.exec(global_pos)
+
     def show_context_menu(self, pos: QPoint):
         index = self.table_view.indexAt(pos)
         if not index.isValid():
@@ -494,11 +629,26 @@ class AnalysisTab(QWidget):
                 bit_idx = max(0, min(7, int((rel_x / width) * 8)))
                 target += f" - Bit {7 - bit_idx}"
 
-        menu = QMenu()
-        action_comment = QAction(f"Adicionar Comentário em {target}...", self)
-        action_comment.triggered.connect(lambda: self.add_comment(can_id, target, index))
-        menu.addAction(action_comment)
-        menu.exec(self.table_view.viewport().mapToGlobal(pos))
+        self._show_id_actions_menu(can_id, target, self.table_view.viewport().mapToGlobal(pos), index)
+
+    def show_list_ids_context_menu(self, pos: QPoint):
+        item = self.list_ids.itemAt(pos)
+        if not item:
+            return
+
+        hex_id = item.data(Qt.ItemDataRole.UserRole)
+        if not hex_id:
+            t = item.text()
+            if "[" in t and "]" in t:
+                hex_id = t.split("[", 1)[1].split("]", 1)[0]
+            else:
+                hex_id = t.strip()
+
+        if not hex_id:
+            return
+
+        target = f"ID {hex_id}"
+        self._show_id_actions_menu(hex_id, target, self.list_ids.viewport().mapToGlobal(pos))
 
     def add_comment(self, can_id: str, target: str, index):
         dialog = CommentDialog(self, target)
@@ -603,8 +753,6 @@ class AnalysisTab(QWidget):
     def _update_id_counts(self):
         """Atualiza os contadores de IDs únicos no barramento e visíveis após filtros."""
         total_unique = len(self.can_database)
-        if hasattr(self, "lbl_id_count"):
-            self.lbl_id_count.setText(f"IDs no Barramento: {total_unique}")
         if hasattr(self, "lbl_id_filter"):
             self.lbl_id_filter.setText(f"Visibilidade de IDs ({total_unique})")
 

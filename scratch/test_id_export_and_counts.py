@@ -20,9 +20,8 @@ def test_id_counts_and_export():
     tab = AnalysisTab(annot_mgr, worker)
 
     # 1. Estado Inicial
-    assert tab.lbl_id_count.text() == "IDs no Barramento: 0"
     assert tab.lbl_filtered_count.text() == "Total: 0 IDs"
-    assert "0" in tab.lbl_id_filter.text()
+    assert tab.lbl_id_filter.text() == "Visibilidade de IDs (0)"
 
     # 2. Injetando frames (incluindo repetidos)
     tab.process_can_frame(0x0C0, 10.0, [0x01, 0x02])
@@ -32,7 +31,6 @@ def test_id_counts_and_export():
     tab.process_can_frame(0x180, 21.0, [0xAA, 0xCC])  # Repetido!
 
     assert len(tab.can_database) == 3
-    assert tab.lbl_id_count.text() == "IDs no Barramento: 3"
     assert tab.lbl_filtered_count.text() == "Total: 3 IDs"
     assert tab.lbl_id_filter.text() == "Visibilidade de IDs (3)"
     print("  [OK] Contagem de IDs únicos no barramento funciona corretamente (3 IDs)!")
@@ -40,7 +38,7 @@ def test_id_counts_and_export():
     # 3. Testando filtro de ID
     tab.txt_filter_id.setText("0C")
     assert tab.lbl_filtered_count.text() == "Exibindo: 1 de 3 IDs"
-    assert tab.lbl_id_count.text() == "IDs no Barramento: 3"
+    assert tab.lbl_id_filter.text() == "Visibilidade de IDs (3)"
     print("  [OK] Filtro dinâmico e atualização de contagem exibindo '1 de 3 IDs'!")
 
     # 4. Limpar filtro
@@ -73,7 +71,6 @@ def test_id_counts_and_export():
     # 6. Testando Reset ao limpar dados
     tab.clear_data()
     assert len(tab.can_database) == 0
-    assert tab.lbl_id_count.text() == "IDs no Barramento: 0"
     assert tab.lbl_filtered_count.text() == "Total: 0 IDs"
     assert tab.lbl_id_filter.text() == "Visibilidade de IDs (0)"
     print("  [OK] Reset limpo ao reiniciar dados!")

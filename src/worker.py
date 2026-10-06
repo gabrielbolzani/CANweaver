@@ -52,6 +52,8 @@ class CANWorker(QThread):
         self.last_timestamps = {}
         self.counters = {0x0C0: 0, 0x180: 0, 0x3F0: 0}
         self.toggle_111 = False
+        self.playback_byte_format_config = "AUTO"
+        self.playback_byte_format = "AUTO"
 
     def run(self):
         self.running = True
@@ -122,22 +124,89 @@ class CANWorker(QThread):
         return "Error Frame", f"Frame de erro genérico (ID={can_id:#05x}, data={data_hex})"
 
     @staticmethod
-    def _parse_playback_payload(raw_bytes: list) -> list[int]:
+    def _detect_csv_payload_format(rows: list) -> str:
+        """
+        Detecta se os bytes B0..B7 do CSV de playback estão em formato DECIMAL ou HEXADECIMAL.
+        """
+        has_hex_chars = False
+        has_decimal_above_99 = False
+
+        for row in rows[:500]:
+            for x in row[3:]:
+                s = str(x).strip()
+                if not s:
+                    continue
+                if s.lower().startswith("0x"):
+                    return "HEX"
+                if any(c in "abcdefABCDEF" for c in s):
+                    has_hex_chars = True
+                elif s.isdigit():
+                    try:
+                        val = int(s, 10)
+                        if 100 <= val <= 255:
+                            has_decimal_above_99 = True
+                    except ValueError:
+                        pass
+
+        if has_hex_chars:
+            return "HEX"
+        if has_decimal_above_99:
+            return "DEC"
+        return "HEX"
+
+    @staticmethod
+    def _parse_playback_payload(raw_bytes: list, byte_format: str = "AUTO") -> list[int]:
         payload = []
+        if byte_format == "DEC":
+            for x in raw_bytes:
+                x_str = str(x).strip()
+                if not x_str:
+                    continue
+                try:
+                    payload.append(int(x_str, 10) & 0xFF)
+                except ValueError:
+                    try:
+                        payload.append(int(x_str, 16) & 0xFF)
+                    except ValueError:
+                        payload.append(0)
+            return payload
+
+        if byte_format == "HEX":
+            for x in raw_bytes:
+                x_str = str(x).strip()
+                if not x_str:
+                    continue
+                try:
+                    v = int(x_str, 16) if not x_str.lower().startswith("0x") else int(x_str, 0)
+                    if v > 255 and x_str.isdigit() and 0 <= int(x_str, 10) <= 255:
+                        payload.append(int(x_str, 10))
+                    else:
+                        payload.append(v & 0xFF)
+                except ValueError:
+                    try:
+                        payload.append(int(x_str, 10) & 0xFF)
+                    except ValueError:
+                        payload.append(0)
+            return payload
+
+        # Fallback "AUTO" por linha individual
+        is_dec_row = any(str(x).strip().isdigit() and 100 <= int(str(x).strip(), 10) <= 255 for x in raw_bytes)
+        has_hex_char = any(any(c in "abcdefABCDEF" for c in str(x).strip()) or str(x).strip().lower().startswith("0x") for x in raw_bytes)
+        use_dec = is_dec_row and not has_hex_char
+
         for x in raw_bytes:
             x_str = str(x).strip()
             if not x_str:
                 continue
             try:
-                v = int(x_str, 16) if not x_str.lower().startswith("0x") else int(x_str, 0)
-                if v > 255 and x_str.isdigit():
-                    try:
-                        dec_v = int(x_str, 10)
-                        if 0 <= dec_v <= 255:
-                            v = dec_v
-                    except ValueError:
-                        pass
-                payload.append(v & 0xFF)
+                if use_dec and x_str.isdigit():
+                    payload.append(int(x_str, 10) & 0xFF)
+                else:
+                    v = int(x_str, 16) if not x_str.lower().startswith("0x") else int(x_str, 0)
+                    if v > 255 and x_str.isdigit() and 0 <= int(x_str, 10) <= 255:
+                        payload.append(int(x_str, 10))
+                    else:
+                        payload.append(v & 0xFF)
             except ValueError:
                 try:
                     payload.append(int(x_str, 10) & 0xFF)
@@ -156,6 +225,12 @@ class CANWorker(QThread):
             self.playback_index = 0
             self.playback_paused = False
 
+            fmt_cfg = getattr(self, "playback_byte_format_config", "AUTO")
+            if fmt_cfg == "AUTO":
+                self.playback_byte_format = self._detect_csv_payload_format(self.playback_rows)
+            else:
+                self.playback_byte_format = fmt_cfg
+
             while self.running:
                 last_msg_time = None
 
@@ -170,7 +245,7 @@ class CANWorker(QThread):
                                 row = self.playback_rows[self.playback_index]
                                 try:
                                     can_id = int(row[1], 16) if not str(row[1]).lower().startswith("0x") else int(str(row[1]), 0)
-                                    payload = self._parse_playback_payload(row[3:])
+                                    payload = self._parse_playback_payload(row[3:], self.playback_byte_format)
                                     self.frame_received.emit(can_id, 0.0, payload)
                                     self.playback_progress.emit(self.playback_index, self.playback_total)
                                 except Exception:
@@ -192,7 +267,7 @@ class CANWorker(QThread):
 
                     timestamp = float(row[0])
                     can_id = int(row[1], 16) if not str(row[1]).lower().startswith("0x") else int(str(row[1]), 0)
-                    payload = self._parse_playback_payload(row[3:])
+                    payload = self._parse_playback_payload(row[3:], self.playback_byte_format)
 
                     if last_msg_time is not None:
                         delay = timestamp - last_msg_time
@@ -212,10 +287,11 @@ class CANWorker(QThread):
 
                     if self.playback_transmit and self.bus:
                         try:
-                            msg = can.Message(arbitration_id=can_id, data=payload, is_extended_id=False)
+                            is_ext = can_id > 0x7FF
+                            msg = can.Message(arbitration_id=can_id, data=payload, is_extended_id=is_ext)
                             self.bus.send(msg)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"[Playback Tx Error] Falha ao enviar ID {can_id:X}: {e}")
 
                     current_time = time.time()
                     if can_id in self.last_timestamps:
@@ -251,7 +327,7 @@ class CANWorker(QThread):
                                 row = self.playback_rows[self.playback_index]
                                 try:
                                     can_id = int(row[1], 16) if not str(row[1]).lower().startswith("0x") else int(str(row[1]), 0)
-                                    payload = self._parse_playback_payload(row[3:])
+                                    payload = self._parse_playback_payload(row[3:], self.playback_byte_format)
                                     self.frame_received.emit(can_id, 0.0, payload)
                                     self.playback_progress.emit(self.playback_index, self.playback_total)
                                 except Exception:
@@ -289,6 +365,12 @@ class CANWorker(QThread):
 
     def stop(self):
         self.running = False
+        if self.bus:
+            try:
+                self.bus.shutdown()
+            except Exception:
+                pass
+            self.bus = None
 
     def pause_playback(self):
         self.playback_paused = True
@@ -336,9 +418,10 @@ class CANWorker(QThread):
                 freq = 0.0
             self.last_timestamps[can_id] = current_time
             self.frame_received.emit(can_id, freq, data)
-        elif self.mode == "HARDWARE" and self.bus:
+        elif (self.mode == "HARDWARE" or (self.mode == "PLAYBACK" and self.playback_transmit)) and self.bus:
             try:
-                msg = can.Message(arbitration_id=can_id, data=data, is_extended_id=False)
+                is_ext = can_id > 0x7FF
+                msg = can.Message(arbitration_id=can_id, data=data, is_extended_id=is_ext)
                 self.bus.send(msg)
                 
                 # Loopback local para atualizar a interface (indicadores)

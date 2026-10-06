@@ -12,16 +12,18 @@ Contém:
 """
 from __future__ import annotations
 
+import os
 import sys
+import re
 import time
 import subprocess
 import urllib.request
 import json
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QComboBox, QLineEdit, QPushButton,
     QLabel, QCheckBox, QFileDialog, QHBoxLayout, QVBoxLayout, QTextEdit,
-    QProgressBar, QFrame, QMessageBox, QApplication
+    QProgressBar, QFrame, QMessageBox, QApplication, QSpinBox
 )
 from src.version import __version__
 
@@ -191,56 +193,191 @@ class ExportDialog(QDialog):
         return self.txt_name.text().strip() or "MeuProjeto"
 
 
-def bring_up_socketcan(channel: str, bitrate: int, listen_only: bool = False) -> tuple:
+def get_available_can_interfaces() -> list[str]:
+    """Detecta interfaces CAN físicas e virtuais no Linux (via /sys/class/net)."""
+    if sys.platform == "win32":
+        return []
+    interfaces = []
+    try:
+        import glob
+        for p in sorted(glob.glob("/sys/class/net/*")):
+            name = os.path.basename(p)
+            type_path = os.path.join(p, "type")
+            try:
+                if os.path.exists(type_path):
+                    with open(type_path, "r") as f:
+                        # 280 = ARPHRD_CAN
+                        if f.read().strip() == "280":
+                            interfaces.append(name)
+                elif name.startswith("can") or name.startswith("vcan"):
+                    interfaces.append(name)
+            except Exception:
+                if name.startswith("can") or name.startswith("vcan"):
+                    interfaces.append(name)
+    except Exception:
+        pass
+    if not interfaces:
+        interfaces = ["can0"]
+    return interfaces
+
+
+def get_can_interface_status(iface: str) -> dict:
+    """Obtém status detalhado da interface (UP/DOWN, bitrate atual, etc.)."""
+    result = {"name": iface, "state": "UNKNOWN", "bitrate": None, "details": ""}
+    if sys.platform == "win32":
+        return result
+    iface = iface.strip()
+    if not iface:
+        return result
+    try:
+        res = subprocess.run(["ip", "-details", "link", "show", iface], capture_output=True, text=True, timeout=2)
+        if res.returncode == 0:
+            out = res.stdout
+            result["details"] = out
+            if "state UP" in out:
+                result["state"] = "UP"
+            elif "state DOWN" in out:
+                result["state"] = "DOWN"
+            m = re.search(r"bitrate\s+(\d+)", out)
+            if m:
+                result["bitrate"] = int(m.group(1))
+        else:
+            result["details"] = res.stderr.strip()
+    except Exception as e:
+        result["details"] = str(e)
+    return result
+
+
+def run_privileged_command(cmd: list[str]) -> tuple[bool, str]:
     """
-    Tenta configurar e subir a interface SocketCAN no Linux (ip link).
+    Executa comando com privilégios administrativos no Linux.
+    Tenta diretamente -> com sudo -n -> com pkexec (interface gráfica de senha polkit).
+    Retorna (sucesso: bool, mensagem_ou_erro: str).
+    """
+    if sys.platform == "win32":
+        return True, "Ambiente Windows"
+
+    # 1. Tentar diretamente (caso o usuário tenha CAP_NET_ADMIN ou já seja root)
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        if res.returncode == 0:
+            return True, res.stdout.strip()
+    except Exception:
+        pass
+
+    # 2. Tentar com sudo -n (se configurado sem senha no sudoers)
+    try:
+        res = subprocess.run(["sudo", "-n"] + cmd, capture_output=True, text=True, timeout=3)
+        if res.returncode == 0:
+            return True, res.stdout.strip()
+    except Exception:
+        pass
+
+    # 3. Tentar com pkexec (interface gráfica nativa do Polkit no Linux para pedir senha de root)
+    pkexec_path = "/usr/bin/pkexec"
+    if os.path.exists(pkexec_path) and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        try:
+            res = subprocess.run([pkexec_path] + cmd, capture_output=True, text=True, timeout=30)
+            if res.returncode == 0:
+                return True, res.stdout.strip()
+            err_msg = res.stderr.strip() or res.stdout.strip()
+            return False, f"pkexec falhou (código {res.returncode}): {err_msg}"
+        except subprocess.TimeoutExpired:
+            return False, "Tempo limite excedido na autenticação do sistema."
+        except Exception as e:
+            return False, f"Erro ao executar via pkexec: {e}"
+
+    return False, "Permissão negada. É necessário privilégios de root (sudo)."
+
+
+def build_socketcan_shell_command(
+    channel: str,
+    bitrate: int,
+    listen_only: bool = False,
+    restart_ms: int = 100,
+    loopback: bool = False,
+    sample_point: float | None = None
+) -> str:
+    """Monta a string do comando shell para iniciar a interface no terminal."""
+    ch = channel.strip() or "can0"
+    parts = [f"sudo ip link set {ch} down &&", f"sudo ip link set {ch} up type can bitrate {bitrate}"]
+    if restart_ms > 0:
+        parts.append(f"restart-ms {restart_ms}")
+    if listen_only:
+        parts.append("listen-only on")
+    if loopback:
+        parts.append("loopback on")
+    if sample_point and 0.0 < sample_point < 1.0:
+        parts.append(f"sample-point {sample_point}")
+    return " ".join(parts)
+
+
+def bring_up_socketcan(
+    channel: str,
+    bitrate: int,
+    listen_only: bool = False,
+    restart_ms: int = 100,
+    loopback: bool = False,
+    sample_point: float | None = None
+) -> tuple[bool, str]:
+    """
+    Configura e sobe a interface SocketCAN no Linux (ip link set ...).
     Retorna (sucesso: bool, mensagem: str).
     """
     if sys.platform == "win32":
         return True, "Ambiente Windows (configuração via driver nativo)"
 
-    channel = channel.strip()
-    if not channel:
-        channel = "can0"
+    channel = channel.strip() or "can0"
 
-    # 1. Tenta derrubar interface se estiver up para permitir reconfiguração
+    # 1. Derrubar interface se estiver ativa para permitir reconfiguração
     cmd_down = ["ip", "link", "set", channel, "down"]
-    try:
-        res = subprocess.run(cmd_down, capture_output=True, text=True, timeout=3)
-        if res.returncode != 0 and "Operation not permitted" in (res.stderr or ""):
-            subprocess.run(["sudo", "-n"] + cmd_down, capture_output=True, text=True, timeout=3)
-    except Exception:
-        pass
+    run_privileged_command(cmd_down)
 
-    # 2. Configurar bitrate
-    type_args = ["type", "can", "bitrate", str(bitrate)]
+    # 2. Configurar bitrate e opções
+    cmd_config = ["ip", "link", "set", channel, "type", "can", "bitrate", str(bitrate)]
+    if restart_ms > 0:
+        cmd_config.extend(["restart-ms", str(restart_ms)])
     if listen_only:
-        type_args.extend(["listen-only", "on"])
+        cmd_config.extend(["listen-only", "on"])
+    if loopback:
+        cmd_config.extend(["loopback", "on"])
+    if sample_point and 0.0 < sample_point < 1.0:
+        cmd_config.extend(["sample-point", str(sample_point)])
 
-    cmd_config = ["ip", "link", "set", channel] + type_args
-    try:
-        res = subprocess.run(cmd_config, capture_output=True, text=True, timeout=3)
-        if res.returncode != 0:
-            if listen_only:
-                cmd_no_lo = ["ip", "link", "set", channel, "type", "can", "bitrate", str(bitrate)]
-                res = subprocess.run(cmd_no_lo, capture_output=True, text=True, timeout=3)
-            if res.returncode != 0:
-                subprocess.run(["sudo", "-n"] + cmd_config, capture_output=True, text=True, timeout=3)
-    except Exception as e:
-        return False, f"Erro ao configurar bitrate: {e}"
+    ok_cfg, out_cfg = run_privileged_command(cmd_config)
 
     # 3. Subir interface
     cmd_up = ["ip", "link", "set", channel, "up"]
-    try:
-        res = subprocess.run(cmd_up, capture_output=True, text=True, timeout=3)
-        if res.returncode != 0:
-            res_sudo = subprocess.run(["sudo", "-n"] + cmd_up, capture_output=True, text=True, timeout=3)
-            if res_sudo.returncode != 0:
-                err = res_sudo.stderr.strip() or res.stderr.strip()
-                return False, f"Não foi possível subir {channel}: {err}"
-        return True, f"Interface {channel} ativa a {bitrate} bps"
-    except Exception as e:
-        return False, f"Erro ao subir interface: {e}"
+    ok_up, out_up = run_privileged_command(cmd_up)
+
+    if ok_up:
+        return True, f"Interface {channel} iniciada com sucesso a {bitrate} bps!"
+    return False, f"Não foi possível subir {channel}: {out_up or out_cfg}"
+
+
+def take_down_socketcan(channel: str) -> tuple[bool, str]:
+    """Derruba a interface SocketCAN (ip link set <channel> down)."""
+    if sys.platform == "win32":
+        return True, "Ambiente Windows"
+    channel = channel.strip() or "can0"
+    ok, out = run_privileged_command(["ip", "link", "set", channel, "down"])
+    if ok:
+        return True, f"Interface {channel} parada com sucesso (DOWN)."
+    return False, f"Falha ao parar {channel}: {out}"
+
+
+def create_vcan_interface(channel: str = "vcan0") -> tuple[bool, str]:
+    """Cria e sobe uma interface virtual CAN (vcan) no Linux para testes."""
+    if sys.platform == "win32":
+        return False, "Interfaces vcan só existem no Linux"
+    channel = channel.strip() or "vcan0"
+    # Carregar módulo vcan se necessário
+    run_privileged_command(["modprobe", "vcan"])
+    ok_add, out_add = run_privileged_command(["ip", "link", "add", "dev", channel, "type", "vcan"])
+    ok_up, out_up = run_privileged_command(["ip", "link", "set", channel, "up"])
+    if ok_up:
+        return True, f"Interface virtual {channel} criada e ativa com sucesso!"
+    return False, f"Erro ao criar {channel}: {out_up or out_add}"
 
 
 class BusScannerThread(QThread):
@@ -513,11 +650,296 @@ class BusDiscoveryDialog(QDialog):
         }
 
 
+class SocketCANConfigDialog(QDialog):
+    """
+    Diálogo para configurar e iniciar interfaces CAN nativas no Linux (SocketCAN),
+    como can0, can1, vcan0, etc. Permite definir bitrate, recuperação de bus-off,
+    listen-only, loopback, derrubar e subir a interface diretamente da GUI.
+    """
+    def __init__(self, parent=None, initial_channel: str = "can0", initial_bitrate: int = 500000):
+        super().__init__(parent)
+        self.setWindowTitle("⚡ Iniciar e Configurar Interface SocketCAN (Linux)")
+        self.resize(540, 500)
+
+        self.current_channel = initial_channel.strip() or "can0"
+        self.current_bitrate = initial_bitrate
+
+        self._build_ui()
+        self._refresh_interface_list()
+        self._update_command_preview()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Cabeçalho explicativo
+        lbl_info = QLabel(
+            "<b>Gerenciador de Interfaces SocketCAN (Linux)</b><br>"
+            "<span style='color: #a1a1aa; font-size: 11px;'>"
+            "Configure e inicie a interface de rede CAN no sistema operacional (equivalente ao "
+            "<code>sudo ip link set canX up type can bitrate ...</code>).</span>"
+        )
+        lbl_info.setWordWrap(True)
+        layout.addWidget(lbl_info)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        # 1. Interface
+        iface_layout = QHBoxLayout()
+        self.cb_iface = QComboBox()
+        self.cb_iface.setEditable(True)
+        self.cb_iface.setToolTip("Nome da interface CAN no Linux (ex: can0, can1, vcan0)")
+        self.cb_iface.currentTextChanged.connect(self._on_iface_changed)
+
+        self.btn_refresh = QPushButton("🔄 Atualizar")
+        self.btn_refresh.setToolTip("Re-escanear interfaces CAN conectadas no sistema (/sys/class/net)")
+        self.btn_refresh.clicked.connect(self._refresh_interface_list)
+
+        self.lbl_status_badge = QLabel("⚪ Verificando...")
+        self.lbl_status_badge.setStyleSheet(
+            "font-weight: bold; padding: 3px 8px; border-radius: 4px; background-color: #27272a; color: #a1a1aa; font-size: 11px;"
+        )
+
+        iface_layout.addWidget(self.cb_iface, 1)
+        iface_layout.addWidget(self.btn_refresh)
+        iface_layout.addWidget(self.lbl_status_badge)
+        form.addRow("Interface CAN:", iface_layout)
+
+        # 2. Bitrate
+        self.cb_bitrate = QComboBox()
+        self.cb_bitrate.setEditable(True)
+        self.cb_bitrate.addItems(["500000", "250000", "125000", "1000000", "100000", "50000", "20000", "33333", "83333", "10000"])
+        self.cb_bitrate.setCurrentText(str(self.current_bitrate))
+        self.cb_bitrate.currentTextChanged.connect(self._update_command_preview)
+        form.addRow("Velocidade (bps):", self.cb_bitrate)
+
+        # 3. Restart-ms
+        self.sb_restart_ms = QSpinBox()
+        self.sb_restart_ms.setRange(0, 10000)
+        self.sb_restart_ms.setValue(100)
+        self.sb_restart_ms.setSuffix(" ms")
+        self.sb_restart_ms.setToolTip("Recuperação automática caso o hardware entre em Bus-Off (100 ms recomendado). 0 = desativado.")
+        self.sb_restart_ms.valueChanged.connect(self._update_command_preview)
+        form.addRow("Auto Restart (Bus-Off):", self.sb_restart_ms)
+
+        # 4. Opções Adicionais
+        opts_layout = QHBoxLayout()
+        self.chk_listen_only = QCheckBox("Somente Escuta (Listen-Only)")
+        self.chk_listen_only.setToolTip("Modo passivo: não envia ACK nem transmite frames")
+        self.chk_listen_only.stateChanged.connect(self._update_command_preview)
+
+        self.chk_loopback = QCheckBox("Loopback Interno")
+        self.chk_loopback.setToolTip("Recebe de volta localmente os frames que transmitir")
+        self.chk_loopback.stateChanged.connect(self._update_command_preview)
+
+        opts_layout.addWidget(self.chk_listen_only)
+        opts_layout.addWidget(self.chk_loopback)
+        form.addRow("Modos:", opts_layout)
+
+        # 5. Sample-point (opcional)
+        self.txt_sample_point = QLineEdit()
+        self.txt_sample_point.setPlaceholderText("ex: 0.875 (opcional)")
+        self.txt_sample_point.textChanged.connect(self._update_command_preview)
+        form.addRow("Sample Point:", self.txt_sample_point)
+
+        layout.addLayout(form)
+
+        # 6. Prévia do comando
+        lbl_cmd_title = QLabel("Comando Shell Gerado:")
+        lbl_cmd_title.setStyleSheet("font-weight: bold; color: #a1a1aa; font-size: 11px; margin-top: 6px;")
+        layout.addWidget(lbl_cmd_title)
+
+        cmd_box = QHBoxLayout()
+        self.txt_cmd_preview = QLineEdit()
+        self.txt_cmd_preview.setReadOnly(True)
+        self.txt_cmd_preview.setStyleSheet(
+            "QLineEdit { background-color: #18181b; color: #38bdf8; font-family: monospace; "
+            "border: 1px solid #3f3f46; border-radius: 4px; padding: 6px; font-size: 11px; }"
+        )
+        self.btn_copy_cmd = QPushButton("📋 Copiar")
+        self.btn_copy_cmd.setToolTip("Copiar comando para executar manualmente no terminal")
+        self.btn_copy_cmd.setStyleSheet("background-color: #27272a; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
+        self.btn_copy_cmd.clicked.connect(self._copy_command)
+
+        cmd_box.addWidget(self.txt_cmd_preview, 1)
+        cmd_box.addWidget(self.btn_copy_cmd)
+        layout.addLayout(cmd_box)
+
+        # 7. Botões de ação direta
+        actions_layout = QHBoxLayout()
+        self.btn_up = QPushButton("🟢 Iniciar Interface (UP)")
+        self.btn_up.setStyleSheet(
+            "QPushButton { background-color: #059669; color: white; padding: 8px 16px; border-radius: 4px; font-weight: bold; font-size: 12px; } "
+            "QPushButton:hover { background-color: #10b981; } QPushButton:pressed { background-color: #047857; }"
+        )
+        self.btn_up.clicked.connect(self._bring_up_interface)
+
+        self.btn_down = QPushButton("🔴 Parar Interface (DOWN)")
+        self.btn_down.setStyleSheet(
+            "QPushButton { background-color: #dc2626; color: white; padding: 8px 14px; border-radius: 4px; font-weight: bold; font-size: 12px; } "
+            "QPushButton:hover { background-color: #ef4444; } QPushButton:pressed { background-color: #b91c1c; }"
+        )
+        self.btn_down.clicked.connect(self._take_down_interface)
+
+        self.btn_vcan = QPushButton("➕ Criar vcan0 Virtual")
+        self.btn_vcan.setToolTip("Cria e inicia uma interface virtual (vcan0) para testes no Linux")
+        self.btn_vcan.setStyleSheet("background-color: #3f3f46; color: white; padding: 8px 12px; border-radius: 4px;")
+        self.btn_vcan.clicked.connect(self._create_vcan)
+
+        actions_layout.addWidget(self.btn_up, 2)
+        actions_layout.addWidget(self.btn_down, 1)
+        actions_layout.addWidget(self.btn_vcan, 1)
+        layout.addLayout(actions_layout)
+
+        # 8. Feedback de execução
+        self.lbl_exec_result = QLabel("")
+        self.lbl_exec_result.setWordWrap(True)
+        self.lbl_exec_result.setStyleSheet("font-size: 11px; margin-top: 4px;")
+        layout.addWidget(self.lbl_exec_result)
+
+        layout.addStretch()
+
+        # 9. Botões de Diálogo
+        bottom_box = QHBoxLayout()
+        bottom_box.addStretch()
+        self.btn_apply = QPushButton("Aplicar e Usar na Conexão")
+        self.btn_apply.setStyleSheet("background-color: #2563eb; color: white; padding: 8px 18px; border-radius: 4px; font-weight: bold;")
+        self.btn_apply.clicked.connect(self.accept)
+
+        self.btn_close = QPushButton("Fechar")
+        self.btn_close.clicked.connect(self.reject)
+
+        bottom_box.addWidget(self.btn_apply)
+        bottom_box.addWidget(self.btn_close)
+        layout.addLayout(bottom_box)
+
+    def _refresh_interface_list(self):
+        detected = get_available_can_interfaces()
+        current = self.cb_iface.currentText().strip() or self.current_channel
+        self.cb_iface.blockSignals(True)
+        self.cb_iface.clear()
+        for iface in detected:
+            self.cb_iface.addItem(iface)
+        if current and self.cb_iface.findText(current) < 0:
+            self.cb_iface.addItem(current)
+        self.cb_iface.setCurrentText(current if current else (detected[0] if detected else "can0"))
+        self.cb_iface.blockSignals(False)
+        self._on_iface_changed()
+
+    def _on_iface_changed(self):
+        iface = self.cb_iface.currentText().strip()
+        status = get_can_interface_status(iface)
+        if status.get("state") == "UP":
+            br_str = f" @ {status['bitrate']} bps" if status.get("bitrate") else ""
+            self.lbl_status_badge.setText(f"🟢 ATIVA (UP){br_str}")
+            self.lbl_status_badge.setStyleSheet(
+                "font-weight: bold; padding: 3px 8px; border-radius: 4px; background-color: #064e3b; color: #34d399; font-size: 11px;"
+            )
+            if status.get("bitrate"):
+                idx = self.cb_bitrate.findText(str(status["bitrate"]))
+                if idx >= 0:
+                    self.cb_bitrate.blockSignals(True)
+                    self.cb_bitrate.setCurrentIndex(idx)
+                    self.cb_bitrate.blockSignals(False)
+        elif status.get("state") == "DOWN":
+            self.lbl_status_badge.setText("⚪ INATIVA (DOWN)")
+            self.lbl_status_badge.setStyleSheet(
+                "font-weight: bold; padding: 3px 8px; border-radius: 4px; background-color: #451a03; color: #fbbf24; font-size: 11px;"
+            )
+        else:
+            self.lbl_status_badge.setText("⚪ NÃO ENCONTRADA")
+            self.lbl_status_badge.setStyleSheet(
+                "font-weight: bold; padding: 3px 8px; border-radius: 4px; background-color: #27272a; color: #a1a1aa; font-size: 11px;"
+            )
+        self._update_command_preview()
+
+    def _get_current_params(self):
+        ch = self.cb_iface.currentText().strip() or "can0"
+        try:
+            br = int(self.cb_bitrate.currentText().strip())
+        except ValueError:
+            br = 500000
+        restart_ms = self.sb_restart_ms.value()
+        listen_only = self.chk_listen_only.isChecked()
+        loopback = self.chk_loopback.isChecked()
+        sample_point = None
+        sp_text = self.txt_sample_point.text().strip()
+        if sp_text:
+            try:
+                sample_point = float(sp_text)
+            except ValueError:
+                pass
+        return ch, br, listen_only, restart_ms, loopback, sample_point
+
+    def _update_command_preview(self):
+        ch, br, listen_only, restart_ms, loopback, sample_point = self._get_current_params()
+        cmd = build_socketcan_shell_command(ch, br, listen_only, restart_ms, loopback, sample_point)
+        self.txt_cmd_preview.setText(cmd)
+
+    def _copy_command(self):
+        cmd = self.txt_cmd_preview.text().strip()
+        QApplication.clipboard().setText(cmd)
+        self.btn_copy_cmd.setText("✓ Copiado!")
+        QTimer.singleShot(1500, lambda: self.btn_copy_cmd.setText("📋 Copiar"))
+
+    def _bring_up_interface(self):
+        ch, br, listen_only, restart_ms, loopback, sample_point = self._get_current_params()
+        self.lbl_exec_result.setText("Configurando e iniciando interface...")
+        self.lbl_exec_result.setStyleSheet("color: #38bdf8;")
+        QApplication.processEvents()
+
+        ok, msg = bring_up_socketcan(ch, br, listen_only, restart_ms, loopback, sample_point)
+        if ok:
+            self.lbl_exec_result.setText(f"✓ {msg}")
+            self.lbl_exec_result.setStyleSheet("color: #10b981; font-weight: bold;")
+        else:
+            self.lbl_exec_result.setText(f"⚠ {msg}\nSe preferir, clique em 'Copiar' e execute o comando no terminal com sudo.")
+            self.lbl_exec_result.setStyleSheet("color: #f87171;")
+
+        self._on_iface_changed()
+
+    def _take_down_interface(self):
+        ch = self.cb_iface.currentText().strip() or "can0"
+        self.lbl_exec_result.setText(f"Derrubando interface {ch}...")
+        self.lbl_exec_result.setStyleSheet("color: #38bdf8;")
+        QApplication.processEvents()
+
+        ok, msg = take_down_socketcan(ch)
+        if ok:
+            self.lbl_exec_result.setText(f"✓ {msg}")
+            self.lbl_exec_result.setStyleSheet("color: #10b981; font-weight: bold;")
+        else:
+            self.lbl_exec_result.setText(f"⚠ {msg}")
+            self.lbl_exec_result.setStyleSheet("color: #f87171;")
+
+        self._on_iface_changed()
+
+    def _create_vcan(self):
+        self.lbl_exec_result.setText("Criando interface virtual vcan0...")
+        self.lbl_exec_result.setStyleSheet("color: #38bdf8;")
+        QApplication.processEvents()
+
+        ok, msg = create_vcan_interface("vcan0")
+        if ok:
+            self.lbl_exec_result.setText(f"✓ {msg}")
+            self.lbl_exec_result.setStyleSheet("color: #10b981; font-weight: bold;")
+            self._refresh_interface_list()
+            self.cb_iface.setCurrentText("vcan0")
+        else:
+            self.lbl_exec_result.setText(f"⚠ {msg}")
+            self.lbl_exec_result.setStyleSheet("color: #f87171;")
+
+    def get_config(self) -> dict:
+        ch, br, _, _, _, _ = self._get_current_params()
+        return {"channel": ch, "bitrate": br}
+
+
 class ConnectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Conectar Dispositivo CAN")
-        self.resize(380, 280)
+        self.resize(390, 310)
 
         self.mode = "HARDWARE"
         self.interface = "socketcan"
@@ -543,6 +965,10 @@ class ConnectionDialog(QDialog):
         self.cb_bitrate.addItems(["500000", "250000", "125000", "1000000", "100000", "50000", "20000"])
         self.cb_bitrate.setCurrentText("500000")
 
+        self.btn_manage_can = QPushButton("⚡ Iniciar / Configurar Interface CAN (Linux)...")
+        self.btn_manage_can.setStyleSheet("background-color: #0f766e; color: white; padding: 6px; border-radius: 4px; font-weight: bold;")
+        self.btn_manage_can.clicked.connect(self._open_can_manager)
+
         self.btn_autodetect = QPushButton("Descobrir Barramento (Auto-Baudrate)...")
         self.btn_autodetect.setStyleSheet("background-color: #1e3a5f; color: white; padding: 6px; border-radius: 4px;")
         self.btn_autodetect.clicked.connect(self._open_autodetect)
@@ -550,6 +976,17 @@ class ConnectionDialog(QDialog):
         self.btn_file = QPushButton("Selecionar Arquivo...")
         self.btn_file.clicked.connect(self.select_file)
         self.lbl_file = QLabel("Nenhum arquivo selecionado")
+
+        self.cb_playback_format = QComboBox()
+        self.cb_playback_format.addItems([
+            "Auto-detectar formato do CSV",
+            "Decimal (valores 0 a 255)",
+            "Hexadecimal (valores 00 a FF)"
+        ])
+        self.cb_playback_format.setToolTip(
+            "Define como os bytes B0..B7 gravados no arquivo CSV serão lidos.\n"
+            "Nota: A transmissão no barramento físico é sempre feita nos bytes reais (00 a FF)."
+        )
 
         self.chk_transmit = QCheckBox("Transmitir no Hardware Real")
         self.chk_transmit.stateChanged.connect(self.on_transmit_change)
@@ -562,14 +999,37 @@ class ConnectionDialog(QDialog):
         self.layout.addRow("Interface:", self.cb_interface)
         self.layout.addRow("Canal/Porta:", self.txt_channel)
         self.layout.addRow("Velocidade:", self.cb_bitrate)
+        self.layout.addRow("", self.btn_manage_can)
         self.layout.addRow("", self.btn_autodetect)
         self.layout.addRow("Arquivo Playback:", self.btn_file)
         self.layout.addRow("", self.lbl_file)
+        self.layout.addRow("Leitura do CSV (Bytes):", self.cb_playback_format)
         self.layout.addRow("", self.chk_transmit)
         self.layout.addRow(self.btn_connect)
 
         self.on_mode_change(0)
         self._on_interface_changed()
+
+    def _open_can_manager(self):
+        cur_chan = self.txt_channel.text().strip() or "can0"
+        try:
+            cur_br = int(self.cb_bitrate.currentText())
+        except ValueError:
+            cur_br = 500000
+
+        dlg = SocketCANConfigDialog(self, initial_channel=cur_chan, initial_bitrate=cur_br)
+        if dlg.exec():
+            cfg = dlg.get_config()
+            if cfg.get("channel"):
+                self.txt_channel.setText(cfg["channel"])
+            if cfg.get("bitrate"):
+                br_str = str(cfg["bitrate"])
+                idx = self.cb_bitrate.findText(br_str)
+                if idx >= 0:
+                    self.cb_bitrate.setCurrentIndex(idx)
+                else:
+                    self.cb_bitrate.addItem(br_str)
+                    self.cb_bitrate.setCurrentText(br_str)
 
     def _on_interface_changed(self):
         """Auxilia na detecção de portas para interfaces seriais como SLCAN (CANable)."""
@@ -591,6 +1051,10 @@ class ConnectionDialog(QDialog):
             self.txt_channel.setPlaceholderText("ex: can0, can1, vcan0")
             if not self.txt_channel.text() or self.txt_channel.text().startswith("COM"):
                 self.txt_channel.setText("can0")
+
+        is_socketcan = (iface == "socketcan")
+        show_hw_controls = (self.cb_mode.currentIndex() == 0 or (self.cb_mode.currentIndex() == 2 and self.chk_transmit.isChecked()))
+        self.set_row_visible(self.btn_manage_can, is_socketcan and show_hw_controls)
 
     def _open_autodetect(self):
         dlg = BusDiscoveryDialog(
@@ -624,40 +1088,38 @@ class ConnectionDialog(QDialog):
                 field_item.widget().setVisible(visible)
 
     def on_mode_change(self, index):
-        if index == 0:  # Hardware Real
-            self.set_row_visible(self.cb_interface, True)
-            self.set_row_visible(self.txt_channel, True)
-            self.set_row_visible(self.cb_bitrate, True)
-            self.set_row_visible(self.btn_autodetect, True)
-            self.set_row_visible(self.btn_file, False)
-            self.set_row_visible(self.lbl_file, False)
-            self.set_row_visible(self.chk_transmit, False)
-        elif index == 1:  # Simulado
-            self.set_row_visible(self.cb_interface, False)
-            self.set_row_visible(self.txt_channel, False)
-            self.set_row_visible(self.cb_bitrate, False)
-            self.set_row_visible(self.btn_autodetect, False)
-            self.set_row_visible(self.btn_file, False)
-            self.set_row_visible(self.lbl_file, False)
-            self.set_row_visible(self.chk_transmit, False)
-        elif index == 2:  # Playback
-            self.set_row_visible(self.btn_file, True)
-            self.set_row_visible(self.lbl_file, True)
-            self.set_row_visible(self.chk_transmit, True)
+        is_hw = (index == 0)
+        is_sim = (index == 1)
+        is_pb = (index == 2)
+        is_sock = (self.cb_interface.currentText() == "socketcan")
+
+        self.set_row_visible(self.cb_interface, is_hw)
+        self.set_row_visible(self.txt_channel, is_hw)
+        self.set_row_visible(self.cb_bitrate, is_hw)
+        self.set_row_visible(self.btn_autodetect, is_hw)
+        self.set_row_visible(self.btn_manage_can, is_hw and is_sock)
+        self.set_row_visible(self.btn_file, is_pb)
+        self.set_row_visible(self.lbl_file, is_pb)
+        self.set_row_visible(self.cb_playback_format, is_pb)
+        self.set_row_visible(self.chk_transmit, is_pb)
+        if is_pb:
             self.on_transmit_change(self.chk_transmit.checkState().value)
 
     def on_transmit_change(self, state):
         if state == 2 and self.cb_mode.currentIndex() == 2:
+            is_sock = (self.cb_interface.currentText() == "socketcan")
             self.set_row_visible(self.cb_interface, True)
             self.set_row_visible(self.txt_channel, True)
             self.set_row_visible(self.cb_bitrate, True)
             self.set_row_visible(self.btn_autodetect, True)
+            self.set_row_visible(self.btn_manage_can, is_sock)
         else:
             if self.cb_mode.currentIndex() == 2:
                 self.set_row_visible(self.cb_interface, False)
                 self.set_row_visible(self.txt_channel, False)
                 self.set_row_visible(self.cb_bitrate, False)
                 self.set_row_visible(self.btn_autodetect, False)
+                self.set_row_visible(self.btn_manage_can, False)
 
     def select_file(self):
         file_name, _ = QFileDialog.getOpenFileName(
@@ -680,13 +1142,16 @@ class ConnectionDialog(QDialog):
         self.channel = self.txt_channel.text().strip() or "can0"
         self.bitrate = int(self.cb_bitrate.currentText())
         self.playback_transmit = self.chk_transmit.isChecked()
+        fmt_idx = self.cb_playback_format.currentIndex()
+        fmt_str = "AUTO" if fmt_idx == 0 else ("DEC" if fmt_idx == 1 else "HEX")
         return {
             "mode": self.mode,
             "interface": self.interface,
             "channel": self.channel,
             "bitrate": self.bitrate,
             "playback_file": self.playback_file,
-            "playback_transmit": self.playback_transmit
+            "playback_transmit": self.playback_transmit,
+            "playback_byte_format": fmt_str
         }
 
 
