@@ -71,6 +71,9 @@ MISSING_DEPS=0
 $PYTHON_EXEC -c "import PyQt6" 2>/dev/null || MISSING_DEPS=1
 $PYTHON_EXEC -c "import can" 2>/dev/null || MISSING_DEPS=1
 $PYTHON_EXEC -c "import serial" 2>/dev/null || MISSING_DEPS=1
+$PYTHON_EXEC -c "import gs_usb" 2>/dev/null || MISSING_DEPS=1
+$PYTHON_EXEC -c "import usb.core" 2>/dev/null || MISSING_DEPS=1
+$PYTHON_EXEC -c "import libusb_package" 2>/dev/null || MISSING_DEPS=1
 
 if [ $MISSING_DEPS -ne 0 ]; then
     echo "[INFO] Dependências ausentes detectadas. Instalando automaticamente..."
@@ -78,7 +81,7 @@ if [ $MISSING_DEPS -ne 0 ]; then
     if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
         $PIP_EXEC install -r "$SCRIPT_DIR/requirements.txt"
     else
-        $PIP_EXEC install "PyQt6>=6.4.0" "python-can>=4.2.0" "pyserial>=3.5" "gs-usb>=0.3.1" "pyusb>=1.2.1"
+        $PIP_EXEC install "PyQt6>=6.4.0" "python-can>=4.2.0" "pyserial>=3.5" "gs-usb>=0.3.1" "pyusb>=1.2.1" "libusb-package>=1.0.26.0"
     fi
     echo "[OK] Dependências instaladas com sucesso!"
 else

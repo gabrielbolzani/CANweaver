@@ -3,3 +3,4 @@ python-can>=4.2.0
 pyserial>=3.5
 gs-usb>=0.3.1
 pyusb>=1.2.1
+libusb-package>=1.0.26.0

@@ -1124,7 +1124,7 @@ class ConnectionDialog(QDialog):
             if not self.txt_channel.text() or self.txt_channel.text().startswith("COM") or self.txt_channel.text().startswith("/dev"):
                 self.txt_channel.setText("can0")
         elif iface == "gs_usb":
-            self.lbl_interface_hint.setText("💡 <b>candleLight / Makerbase (gs_usb):</b> Adaptador nativo USB (VID 1D50:606F). No Windows requer 'pip install gs-usb' e driver WinUSB.")
+            self.lbl_interface_hint.setText("💡 <b>candleLight / Makerbase (gs_usb):</b> Adaptador nativo USB (VID 1D50:606F). No Windows utiliza WinUSB com backend nativo libusb.")
             self.lbl_interface_hint.setVisible(True)
             self.btn_detect_ports.setVisible(False)
             cur = self.txt_channel.text().strip()

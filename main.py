@@ -106,6 +106,61 @@ from src.version import __version__
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+_libusb_backend_initialized = False
+
+
+def setup_libusb_backend():
+    """
+    Configura o backend nativo libusb para o pyusb no Windows via libusb_package.
+    Garante que pyusb encontre a DLL do libusb-1.0 sem intervenção manual,
+    eliminando o erro 'ValueError: No backend available'.
+    """
+    global _libusb_backend_initialized
+    if _libusb_backend_initialized:
+        return
+    try:
+        import libusb_package
+        import usb.backend.libusb1
+        import usb.core
+
+        lib_path = libusb_package.get_library_path()
+        if lib_path and os.path.exists(str(lib_path)):
+            lib_dir = str(lib_path.parent)
+            if lib_dir not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = lib_dir + os.pathsep + os.environ.get("PATH", "")
+            if hasattr(os, "add_dll_directory"):
+                try:
+                    os.add_dll_directory(lib_dir)
+                except Exception:
+                    pass
+
+        orig_get_backend = usb.backend.libusb1.get_backend
+        def patched_get_backend(find_library=None):
+            if find_library is None:
+                find_library = libusb_package.find_library
+            be = orig_get_backend(find_library=find_library)
+            if be is None:
+                be = libusb_package.get_libusb1_backend()
+            return be
+        usb.backend.libusb1.get_backend = patched_get_backend
+
+        orig_find = usb.core.find
+        def patched_find(*args, **kwargs):
+            if kwargs.get("backend") is None:
+                be = usb.backend.libusb1.get_backend()
+                if be is not None:
+                    kwargs["backend"] = be
+            return orig_find(*args, **kwargs)
+        usb.core.find = patched_find
+
+        _libusb_backend_initialized = True
+    except Exception:
+        pass
+
+
+setup_libusb_backend()
+
+
 class ClickableSlider(QSlider):
     """QSlider aprimorado com suporte a salto direto com clique do mouse em qualquer ponto da barra."""
     def mousePressEvent(self, event):
@@ -906,30 +961,48 @@ class MainWindow(QMainWindow):
             if config.get("interface") == "socketcan":
                 bring_up_socketcan(config.get("channel", "can0"), config.get("bitrate", 500000), listen_only=False)
             elif config.get("interface") == "gs_usb":
+                missing_pkgs = []
                 try:
                     import gs_usb
+                except ImportError:
+                    missing_pkgs.append("gs-usb>=0.3.1")
+                try:
                     import usb.core
                 except ImportError:
+                    missing_pkgs.append("pyusb>=1.2.1")
+                try:
+                    import libusb_package
+                except ImportError:
+                    missing_pkgs.append("libusb-package>=1.0.26.0")
+
+                if missing_pkgs:
                     reply = QMessageBox.question(
                         self,
-                        "Instalar gs-usb Automaticamente",
-                        "O suporte para adaptadores candleLight (gs_usb) requer as bibliotecas 'gs-usb' e 'pyusb'.\n\n"
-                        "Deseja que o CANweaver instale-as automaticamente agora via pip?",
+                        "Instalar Dependências candleLight",
+                        "O suporte para adaptadores candleLight (gs_usb) requer os seguintes pacotes:\n"
+                        f"{', '.join(missing_pkgs)}\n\n"
+                        "Deseja que o CANweaver instale-os automaticamente agora via pip?",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.Yes
                     )
                     if reply == QMessageBox.StandardButton.Yes:
-                        self.statusBar().showMessage("Instalando gs-usb e pyusb via pip...", 6000)
+                        self.statusBar().showMessage("Instalando dependências via pip...", 6000)
                         QApplication.processEvents()
-                        cmd = [sys.executable, "-m", "pip", "install", "gs-usb>=0.3.1", "pyusb>=1.2.1"]
+                        cmd = [sys.executable, "-m", "pip", "install"] + missing_pkgs
                         ret = subprocess.call(cmd)
                         if ret == 0:
-                            self.statusBar().showMessage("gs-usb instalado com sucesso!", 4000)
+                            self.statusBar().showMessage("Dependências instaladas com sucesso!", 4000)
+                            setup_libusb_backend()
                         else:
-                            QMessageBox.warning(self, "Aviso", "Não foi possível instalar automaticamente. Tente executar no terminal:\npip install gs-usb pyusb")
+                            QMessageBox.warning(
+                                self, "Aviso",
+                                "Não foi possível instalar automaticamente.\n"
+                                f"Tente executar no terminal:\npip install {' '.join(missing_pkgs)}"
+                            )
                             return
                     else:
                         return
+                setup_libusb_backend()
             try:
                 chan = config["channel"]
                 if config.get("interface") == "gs_usb":
@@ -948,17 +1021,33 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 err_str = str(e)
                 if config.get("interface") == "gs_usb" or "gs_usb" in err_str:
-                    msg = (
-                        f"Não foi possível conectar ao hardware candleLight (gs_usb):\n{e}\n\n"
-                        "💡 Dicas para o Windows:\n"
-                        "1. Certifique-se de instalar o pacote gs-usb no terminal:\n"
-                        "     pip install gs-usb pyusb\n"
-                        "2. Verifique se o dispositivo (VID 1D50 / PID 606F) possui driver WinUSB ativo."
-                    )
+                    if "No backend available" in err_str:
+                        msg = (
+                            f"Não foi possível conectar ao hardware candleLight (gs_usb):\n{e}\n\n"
+                            "💡 O PyUSB não localizou o backend nativo libusb.\n"
+                            "O pacote 'libusb-package' resolve isso automaticamente.\n"
+                            "Tente reiniciar pelo run.bat ou executar no terminal:\n"
+                            "     pip install libusb-package gs-usb pyusb"
+                        )
+                    elif "Cannot find device" in err_str or "Devices found: 0" in err_str or "not found" in err_str.lower():
+                        msg = (
+                            f"Não foi possível conectar ao hardware candleLight (gs_usb):\n{e}\n\n"
+                            "💡 Dispositivo candleLight / CANable não detectado:\n"
+                            "1. Verifique se o cabo USB está conectado firmemente.\n"
+                            "2. No Windows, verifique se o driver WinUSB está ativo para o dispositivo (VID 1D50 / PID 606F).\n"
+                            "   (Se aparecer com exclamação no Gerenciador de Dispositivos, use o Zadig para associar o WinUSB)."
+                        )
+                    else:
+                        msg = (
+                            f"Não foi possível conectar ao hardware candleLight (gs_usb):\n{e}\n\n"
+                            "💡 Dicas para o Windows:\n"
+                            "1. Certifique-se de que o dispositivo possui driver WinUSB ativo (VID 1D50 / PID 606F).\n"
+                            "2. Se outra aplicação estiver usando o dispositivo, feche-a antes de conectar."
+                        )
                 else:
                     msg = f"Não foi possível conectar ao hardware:\n{e}"
                 QMessageBox.critical(self, "Erro de Conexão", msg)
-                self.lbl_status.setText(f"Erro de Conexão")
+                self.lbl_status.setText("Erro de Conexão")
                 self.current_connection_config = None
                 self._update_connection_button_ui(connected=False)
                 return
@@ -978,12 +1067,23 @@ class MainWindow(QMainWindow):
                 if config.get("interface") == "socketcan":
                     bring_up_socketcan(config.get("channel", "can0"), config.get("bitrate", 500000), listen_only=False)
                 elif config.get("interface") == "gs_usb":
+                    missing_pkgs = []
                     try:
                         import gs_usb
+                    except ImportError:
+                        missing_pkgs.append("gs-usb>=0.3.1")
+                    try:
                         import usb.core
                     except ImportError:
-                        cmd = [sys.executable, "-m", "pip", "install", "gs-usb>=0.3.1", "pyusb>=1.2.1"]
+                        missing_pkgs.append("pyusb>=1.2.1")
+                    try:
+                        import libusb_package
+                    except ImportError:
+                        missing_pkgs.append("libusb-package>=1.0.26.0")
+                    if missing_pkgs:
+                        cmd = [sys.executable, "-m", "pip", "install"] + missing_pkgs
                         subprocess.call(cmd)
+                    setup_libusb_backend()
                 try:
                     chan = config["channel"]
                     if config.get("interface") == "gs_usb":
