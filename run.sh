@@ -78,7 +78,7 @@ if [ $MISSING_DEPS -ne 0 ]; then
     if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
         $PIP_EXEC install -r "$SCRIPT_DIR/requirements.txt"
     else
-        $PIP_EXEC install "PyQt6>=6.4.0" "python-can>=4.2.0" "pyserial>=3.5"
+        $PIP_EXEC install "PyQt6>=6.4.0" "python-can>=4.2.0" "pyserial>=3.5" "gs-usb>=0.3.1" "pyusb>=1.2.1"
     fi
     echo "[OK] Dependências instaladas com sucesso!"
 else

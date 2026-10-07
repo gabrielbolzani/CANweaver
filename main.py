@@ -83,16 +83,16 @@ import ctypes
 
 import can
 
-from PyQt6.QtCore import Qt, QTimer, QDateTime
+from PyQt6.QtCore import Qt, QTimer, QDateTime, QPoint
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QLabel,
     QMessageBox, QInputDialog, QLineEdit, QWidget, QHBoxLayout, QSlider,
-    QVBoxLayout, QTabWidget, QDockWidget, QComboBox
+    QVBoxLayout, QTabWidget, QDockWidget, QComboBox, QMenu
 )
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QAction
 
 from src.worker import CANWorker
-from src.dialogs import ConnectionDialog, AboutDialog, BusDiscoveryDialog, SocketCANConfigDialog, bring_up_socketcan
+from src.dialogs import ConnectionDialog, AboutDialog, BusDiscoveryDialog, SocketCANConfigDialog, bring_up_socketcan, take_down_socketcan
 from src.annotations import AnnotationManager
 from src.analysis_tab import AnalysisTab
 from src.transmit_tab import TransmitTab
@@ -251,6 +251,10 @@ class MainWindow(QMainWindow):
         action_connect.triggered.connect(self._open_connection_dialog)
         menu_conn.addAction(action_connect)
 
+        action_disconnect = QAction("Desconectar Barramento", self)
+        action_disconnect.triggered.connect(lambda: self._disconnect_can(take_down_iface=False))
+        menu_conn.addAction(action_disconnect)
+
         action_autodetect = QAction("Descobrir Barramento (Auto-Baudrate)...", self)
         action_autodetect.triggered.connect(self._open_bus_discovery_dialog)
         menu_conn.addAction(action_autodetect)
@@ -288,7 +292,7 @@ class MainWindow(QMainWindow):
         menu_ai.addAction(action_clear_ai)
 
 
-        # ── Corner widget: Gravar | Status | Sobre ────────────────────
+        # ── Corner widget: Gravar | Status | Tomada CAN | Sobre ─────────
         corner = QWidget()
         corner.setStyleSheet("background-color: #202024;")
         corner_layout = QHBoxLayout(corner)
@@ -310,6 +314,12 @@ class MainWindow(QMainWindow):
             "color: #a1a1aa; font-weight: bold; font-size: 11px; padding: 0 4px;"
         )
 
+        # Botão com ícone de tomada para gerenciar conexão CAN rapidamente
+        self.btn_conn_toggle = QPushButton("🔌 Conectar")
+        self.btn_conn_toggle.setToolTip("Conectar ao barramento CAN...")
+        self.btn_conn_toggle.clicked.connect(self._on_conn_toggle_clicked)
+        self._update_connection_button_ui(connected=False)
+
         self.btn_about = QPushButton("Sobre")
         self.btn_about.setToolTip("Sobre o CANweaver")
         self.btn_about.clicked.connect(self._show_about)
@@ -321,6 +331,7 @@ class MainWindow(QMainWindow):
 
         corner_layout.addWidget(self.btn_record)
         corner_layout.addWidget(self.lbl_status)
+        corner_layout.addWidget(self.btn_conn_toggle)
         corner_layout.addWidget(self.btn_about)
 
         menubar.setCornerWidget(corner, Qt.Corner.TopRightCorner)
@@ -884,6 +895,7 @@ class MainWindow(QMainWindow):
     def _start_worker(self, config: dict):
         if self.can_thread and self.can_thread.isRunning():
             self.can_thread.stop()
+            self.can_thread.wait(500)
 
         self.analysis_tab.current_bitrate = config.get("bitrate", 500000)
 
@@ -893,22 +905,68 @@ class MainWindow(QMainWindow):
         if config["mode"] == "HARDWARE":
             if config.get("interface") == "socketcan":
                 bring_up_socketcan(config.get("channel", "can0"), config.get("bitrate", 500000), listen_only=False)
+            elif config.get("interface") == "gs_usb":
+                try:
+                    import gs_usb
+                    import usb.core
+                except ImportError:
+                    reply = QMessageBox.question(
+                        self,
+                        "Instalar gs-usb Automaticamente",
+                        "O suporte para adaptadores candleLight (gs_usb) requer as bibliotecas 'gs-usb' e 'pyusb'.\n\n"
+                        "Deseja que o CANweaver instale-as automaticamente agora via pip?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.Yes
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        self.statusBar().showMessage("Instalando gs-usb e pyusb via pip...", 6000)
+                        QApplication.processEvents()
+                        cmd = [sys.executable, "-m", "pip", "install", "gs-usb>=0.3.1", "pyusb>=1.2.1"]
+                        ret = subprocess.call(cmd)
+                        if ret == 0:
+                            self.statusBar().showMessage("gs-usb instalado com sucesso!", 4000)
+                        else:
+                            QMessageBox.warning(self, "Aviso", "Não foi possível instalar automaticamente. Tente executar no terminal:\npip install gs-usb pyusb")
+                            return
+                    else:
+                        return
             try:
+                chan = config["channel"]
+                if config.get("interface") == "gs_usb":
+                    try:
+                        chan = int(chan)
+                    except (ValueError, TypeError):
+                        chan = 0
                 self.can_thread.bus = can.Bus(
                     interface=config["interface"],
-                    channel=config["channel"],
+                    channel=chan,
                     bitrate=config["bitrate"]
                 )
                 self.lbl_status.setText(
                     f"{config['interface']} | {config['channel']} @ {config['bitrate']}"
                 )
             except Exception as e:
-                QMessageBox.critical(self, "Erro de Conexão", f"Não foi possível conectar ao hardware:\n{e}")
+                err_str = str(e)
+                if config.get("interface") == "gs_usb" or "gs_usb" in err_str:
+                    msg = (
+                        f"Não foi possível conectar ao hardware candleLight (gs_usb):\n{e}\n\n"
+                        "💡 Dicas para o Windows:\n"
+                        "1. Certifique-se de instalar o pacote gs-usb no terminal:\n"
+                        "     pip install gs-usb pyusb\n"
+                        "2. Verifique se o dispositivo (VID 1D50 / PID 606F) possui driver WinUSB ativo."
+                    )
+                else:
+                    msg = f"Não foi possível conectar ao hardware:\n{e}"
+                QMessageBox.critical(self, "Erro de Conexão", msg)
                 self.lbl_status.setText(f"Erro de Conexão")
+                self.current_connection_config = None
+                self._update_connection_button_ui(connected=False)
                 return
         elif config["mode"] == "PLAYBACK":
             if not config["playback_file"]:
                 QMessageBox.warning(self, "Aviso", "Nenhum arquivo selecionado.")
+                self.current_connection_config = None
+                self._update_connection_button_ui(connected=False)
                 return
             self.can_thread.playback_file = config["playback_file"]
             self.can_thread.playback_transmit = config.get("playback_transmit", False)
@@ -919,10 +977,23 @@ class MainWindow(QMainWindow):
             if self.can_thread.playback_transmit:
                 if config.get("interface") == "socketcan":
                     bring_up_socketcan(config.get("channel", "can0"), config.get("bitrate", 500000), listen_only=False)
+                elif config.get("interface") == "gs_usb":
+                    try:
+                        import gs_usb
+                        import usb.core
+                    except ImportError:
+                        cmd = [sys.executable, "-m", "pip", "install", "gs-usb>=0.3.1", "pyusb>=1.2.1"]
+                        subprocess.call(cmd)
                 try:
+                    chan = config["channel"]
+                    if config.get("interface") == "gs_usb":
+                        try:
+                            chan = int(chan)
+                        except (ValueError, TypeError):
+                            chan = 0
                     self.can_thread.bus = can.Bus(
                         interface=config["interface"],
-                        channel=config["channel"],
+                        channel=chan,
                         bitrate=config["bitrate"]
                     )
                     self.lbl_status.setText(f"Playback (Tx {config['channel']}): {os.path.basename(config['playback_file'])}")
@@ -982,6 +1053,113 @@ class MainWindow(QMainWindow):
 
         self.analysis_tab.clear_data()
         self.can_thread.start()
+        self.current_connection_config = config
+        self._update_connection_button_ui(connected=True)
+
+    def _update_connection_button_ui(self, connected: bool):
+        self.is_connected = connected
+        if connected:
+            self.btn_conn_toggle.setText("🔌 Conectado ▼")
+            self.btn_conn_toggle.setToolTip("Barramento conectado. Clique para desconectar, derrubar interface ou trocar dispositivo.")
+            self.btn_conn_toggle.setStyleSheet(
+                "QPushButton { background-color: #064e3b; color: #6ee7b7; font-size: 11px; font-weight: bold;"
+                " border: 1px solid #10b981; border-radius: 4px; padding: 4px 8px; }"
+                "QPushButton:hover { background-color: #047857; color: white; }"
+            )
+        else:
+            self.btn_conn_toggle.setText("🔌 Conectar")
+            self.btn_conn_toggle.setToolTip("Conectar ao barramento CAN...")
+            self.btn_conn_toggle.setStyleSheet(
+                "QPushButton { background-color: #1e293b; color: #94a3b8; font-size: 11px; font-weight: bold;"
+                " border: 1px solid #475569; border-radius: 4px; padding: 4px 8px; }"
+                "QPushButton:hover { background-color: #2563eb; color: white; border-color: #3b82f6; }"
+            )
+
+    def _on_conn_toggle_clicked(self):
+        if not getattr(self, "is_connected", False):
+            self._open_connection_dialog()
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #27272a;
+                color: #e4e4e7;
+                border: 1px solid #3f3f46;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 16px;
+                border-radius: 3px;
+            }
+            QMenu::item:selected {
+                background-color: #3b82f6;
+                color: white;
+            }
+        """)
+
+        act_disconnect = menu.addAction("🔌 Desconectar Barramento")
+        act_disconnect.setToolTip("Para a captura de frames e libera a porta.")
+        act_disconnect.triggered.connect(lambda: self._disconnect_can(take_down_iface=False))
+
+        is_socketcan = (
+            hasattr(self, "current_connection_config")
+            and bool(self.current_connection_config)
+            and self.current_connection_config.get("interface") == "socketcan"
+        )
+        if is_socketcan:
+            ch = self.current_connection_config.get("channel", "can0")
+            act_kill = menu.addAction(f"⛔ Derrubar / Matar Interface ({ch} DOWN)")
+            act_kill.setToolTip(f"Desconecta e desliga a interface {ch} no sistema operacional.")
+            act_kill.triggered.connect(lambda: self._disconnect_can(take_down_iface=True))
+
+        menu.addSeparator()
+        act_change = menu.addAction("🔄 Trocar Conexão / Reconectar...")
+        act_change.triggered.connect(self._open_connection_dialog)
+
+        menu.exec(self.btn_conn_toggle.mapToGlobal(QPoint(0, self.btn_conn_toggle.height())))
+
+    def _disconnect_can(self, take_down_iface: bool = False):
+        ch_to_down = None
+        if hasattr(self, "current_connection_config") and self.current_connection_config:
+            if self.current_connection_config.get("interface") == "socketcan":
+                ch_to_down = self.current_connection_config.get("channel", "can0")
+
+        if self.can_thread and self.can_thread.isRunning():
+            self.can_thread.stop()
+            self.can_thread.wait(500)
+
+        self.current_connection_config = None
+        self.lbl_status.setText("Desconectado")
+        self._update_connection_button_ui(connected=False)
+
+        if hasattr(self, "player_bar"):
+            self.player_bar.hide()
+
+        # Recriar worker IDLE para manter abas operantes
+        self.can_thread = CANWorker()
+        self.can_thread.mode = "IDLE"
+        self.analysis_tab.can_thread = self.can_thread
+        self.transmit_tab.can_thread = self.can_thread
+        self.widgets_tab.can_thread = self.can_thread
+        self.copilot_panel.set_worker(self.can_thread)
+        self.can_thread.frame_received.connect(self.analysis_tab.process_can_frame)
+        self.can_thread.frame_received.connect(self.widgets_tab._broadcast_can_frame)
+        self.can_thread.error_occurred.connect(self._handle_worker_error)
+        self.can_thread.error_frame_received.connect(self.error_tab.add_error_frame)
+        self.can_thread.error_frame_received.connect(self.analysis_tab.on_error_frame)
+        if getattr(self, "is_recording", False):
+            self.can_thread.frame_received.connect(self._record_frame)
+        self.can_thread.start()
+
+        if take_down_iface and ch_to_down:
+            ok, msg = take_down_socketcan(ch_to_down)
+            if ok:
+                self.statusBar().showMessage(f"Interface {ch_to_down} parada (DOWN) com sucesso.", 4000)
+            else:
+                self.statusBar().showMessage(f"Aviso ao parar {ch_to_down}: {msg}", 4000)
+        else:
+            self.statusBar().showMessage("Barramento desconectado com sucesso.", 3000)
 
     def _play_button_style(self, playing: bool) -> str:
         if playing:
@@ -1158,6 +1336,12 @@ class MainWindow(QMainWindow):
             # Remove tempo anterior e atualiza status
             base = re.sub(r' ⏹ \d+:\d+', '', self.lbl_status.text()).replace(" [REC]", "")
             self.lbl_status.setText(f"{base} ⏹ {mins:02d}:{secs:02d} [REC]")
+
+    def closeEvent(self, event):
+        if hasattr(self, "can_thread") and self.can_thread and self.can_thread.isRunning():
+            self.can_thread.stop()
+            self.can_thread.wait(500)
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":

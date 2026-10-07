@@ -19,11 +19,12 @@ import time
 import subprocess
 import urllib.request
 import json
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QComboBox, QLineEdit, QPushButton,
     QLabel, QCheckBox, QFileDialog, QHBoxLayout, QVBoxLayout, QTextEdit,
-    QProgressBar, QFrame, QMessageBox, QApplication, QSpinBox
+    QProgressBar, QFrame, QMessageBox, QApplication, QSpinBox,
+    QMenu, QWidget
 )
 from src.version import __version__
 
@@ -322,6 +323,8 @@ def bring_up_socketcan(
 ) -> tuple[bool, str]:
     """
     Configura e sobe a interface SocketCAN no Linux (ip link set ...).
+    Executa a sequência em uma única invocação para solicitar autorização administrativa
+    (pkexec/polkit) apenas UMA vez, em vez de disparar múltiplos pop-ups de senha.
     Retorna (sucesso: bool, mensagem: str).
     """
     if sys.platform == "win32":
@@ -329,30 +332,26 @@ def bring_up_socketcan(
 
     channel = channel.strip() or "can0"
 
-    # 1. Derrubar interface se estiver ativa para permitir reconfiguração
-    cmd_down = ["ip", "link", "set", channel, "down"]
-    run_privileged_command(cmd_down)
-
-    # 2. Configurar bitrate e opções
-    cmd_config = ["ip", "link", "set", channel, "type", "can", "bitrate", str(bitrate)]
+    # Montar parâmetros de configuração CAN
+    config_opts = ["type can", f"bitrate {bitrate}"]
     if restart_ms > 0:
-        cmd_config.extend(["restart-ms", str(restart_ms)])
+        config_opts.append(f"restart-ms {restart_ms}")
     if listen_only:
-        cmd_config.extend(["listen-only", "on"])
+        config_opts.append("listen-only on")
     if loopback:
-        cmd_config.extend(["loopback", "on"])
+        config_opts.append("loopback on")
     if sample_point and 0.0 < sample_point < 1.0:
-        cmd_config.extend(["sample-point", str(sample_point)])
+        config_opts.append(f"sample-point {sample_point}")
 
-    ok_cfg, out_cfg = run_privileged_command(cmd_config)
+    opts_str = " ".join(config_opts)
 
-    # 3. Subir interface
-    cmd_up = ["ip", "link", "set", channel, "up"]
-    ok_up, out_up = run_privileged_command(cmd_up)
+    # 1 comando subshell combinado: derruba interface (caso ativa) -> aplica bitrate/opções -> sobe
+    combined_cmd = f"ip link set {channel} down 2>/dev/null; ip link set {channel} {opts_str} && ip link set {channel} up"
+    ok, out = run_privileged_command(["sh", "-c", combined_cmd])
 
-    if ok_up:
+    if ok:
         return True, f"Interface {channel} iniciada com sucesso a {bitrate} bps!"
-    return False, f"Não foi possível subir {channel}: {out_up or out_cfg}"
+    return False, f"Não foi possível subir {channel}: {out}"
 
 
 def take_down_socketcan(channel: str) -> tuple[bool, str]:
@@ -371,13 +370,12 @@ def create_vcan_interface(channel: str = "vcan0") -> tuple[bool, str]:
     if sys.platform == "win32":
         return False, "Interfaces vcan só existem no Linux"
     channel = channel.strip() or "vcan0"
-    # Carregar módulo vcan se necessário
-    run_privileged_command(["modprobe", "vcan"])
-    ok_add, out_add = run_privileged_command(["ip", "link", "add", "dev", channel, "type", "vcan"])
-    ok_up, out_up = run_privileged_command(["ip", "link", "set", channel, "up"])
-    if ok_up:
+    # Executa modprobe, add e up em uma única chamada
+    combined_cmd = f"modprobe vcan 2>/dev/null; ip link add dev {channel} type vcan 2>/dev/null; ip link set {channel} up"
+    ok, out = run_privileged_command(["sh", "-c", combined_cmd])
+    if ok:
         return True, f"Interface virtual {channel} criada e ativa com sucesso!"
-    return False, f"Erro ao criar {channel}: {out_up or out_add}"
+    return False, f"Erro ao criar {channel}: {out}"
 
 
 class BusScannerThread(QThread):
@@ -939,11 +937,12 @@ class ConnectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Conectar Dispositivo CAN")
-        self.resize(390, 310)
+        self.resize(420, 360)
 
+        is_win = (sys.platform == "win32")
         self.mode = "HARDWARE"
-        self.interface = "socketcan"
-        self.channel = "can0"
+        self.interface = "slcan" if is_win else "socketcan"
+        self.channel = "COM3" if is_win else "can0"
         self.bitrate = 500000
         self.playback_file = ""
         self.playback_transmit = False
@@ -955,11 +954,32 @@ class ConnectionDialog(QDialog):
         self.cb_mode.currentIndexChanged.connect(self.on_mode_change)
 
         self.cb_interface = QComboBox()
-        self.cb_interface.addItems(["socketcan", "slcan", "vector", "virtual", "ixxat", "pcan"])
+        if is_win:
+            self.cb_interface.addItems(["gs_usb", "slcan", "pcan", "vector", "ixxat", "virtual", "socketcan"])
+        else:
+            self.cb_interface.addItems(["socketcan", "gs_usb", "slcan", "pcan", "vector", "virtual", "ixxat"])
         self.cb_interface.currentIndexChanged.connect(self._on_interface_changed)
 
-        self.txt_channel = QLineEdit("can0")
-        self.txt_channel.setPlaceholderText("ex: can0, COM3, /dev/ttyUSB0")
+        # Canal / Porta serial com botão de autodetecção
+        self.chan_widget = QWidget()
+        chan_layout = QHBoxLayout(self.chan_widget)
+        chan_layout.setContentsMargins(0, 0, 0, 0)
+        chan_layout.setSpacing(6)
+
+        self.txt_channel = QLineEdit(self.channel)
+        self.txt_channel.setPlaceholderText("ex: COM3 (Win/Makerbase) ou can0 (Linux)")
+
+        self.btn_detect_ports = QPushButton("🔍 Portas COM/ACM")
+        self.btn_detect_ports.setToolTip("Detectar portas seriais disponíveis para adaptadores SLCAN (Makerbase CANable)")
+        self.btn_detect_ports.setStyleSheet("padding: 4px 8px; font-size: 11px;")
+        self.btn_detect_ports.clicked.connect(self._detect_serial_ports)
+
+        chan_layout.addWidget(self.txt_channel, 1)
+        chan_layout.addWidget(self.btn_detect_ports)
+
+        self.lbl_interface_hint = QLabel()
+        self.lbl_interface_hint.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        self.lbl_interface_hint.setWordWrap(True)
 
         self.cb_bitrate = QComboBox()
         self.cb_bitrate.addItems(["500000", "250000", "125000", "1000000", "100000", "50000", "20000"])
@@ -968,6 +988,11 @@ class ConnectionDialog(QDialog):
         self.btn_manage_can = QPushButton("⚡ Iniciar / Configurar Interface CAN (Linux)...")
         self.btn_manage_can.setStyleSheet("background-color: #0f766e; color: white; padding: 6px; border-radius: 4px; font-weight: bold;")
         self.btn_manage_can.clicked.connect(self._open_can_manager)
+
+        self.btn_kill_can = QPushButton("⛔ Derrubar / Matar Interface (DOWN)")
+        self.btn_kill_can.setStyleSheet("background-color: #7f1d1d; color: #fecaca; padding: 6px; border-radius: 4px; font-weight: bold;")
+        self.btn_kill_can.setToolTip("Derruba a interface SocketCAN no Linux (ip link set <canal> down)")
+        self.btn_kill_can.clicked.connect(self._take_down_current_can)
 
         self.btn_autodetect = QPushButton("Descobrir Barramento (Auto-Baudrate)...")
         self.btn_autodetect.setStyleSheet("background-color: #1e3a5f; color: white; padding: 6px; border-radius: 4px;")
@@ -997,9 +1022,11 @@ class ConnectionDialog(QDialog):
 
         self.layout.addRow("Modo:", self.cb_mode)
         self.layout.addRow("Interface:", self.cb_interface)
-        self.layout.addRow("Canal/Porta:", self.txt_channel)
+        self.layout.addRow("Canal/Porta:", self.chan_widget)
+        self.layout.addRow("", self.lbl_interface_hint)
         self.layout.addRow("Velocidade:", self.cb_bitrate)
         self.layout.addRow("", self.btn_manage_can)
+        self.layout.addRow("", self.btn_kill_can)
         self.layout.addRow("", self.btn_autodetect)
         self.layout.addRow("Arquivo Playback:", self.btn_file)
         self.layout.addRow("", self.lbl_file)
@@ -1031,30 +1058,87 @@ class ConnectionDialog(QDialog):
                     self.cb_bitrate.addItem(br_str)
                     self.cb_bitrate.setCurrentText(br_str)
 
+    def _take_down_current_can(self):
+        ch = self.txt_channel.text().strip() or "can0"
+        ok, msg = take_down_socketcan(ch)
+        if ok:
+            QMessageBox.information(self, "Interface Parada", f"✓ {msg}")
+        else:
+            QMessageBox.warning(self, "Aviso", f"⚠ {msg}")
+
+    def _detect_serial_ports(self):
+        try:
+            import serial.tools.list_ports
+            comports = list(serial.tools.list_ports.comports())
+            if not comports:
+                QMessageBox.information(self, "Portas Seriais", "Nenhuma porta serial detectada no sistema.")
+                return
+
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu { background-color: #27272a; color: #e4e4e7; border: 1px solid #3f3f46; padding: 4px; }
+                QMenu::item { padding: 6px 16px; border-radius: 3px; }
+                QMenu::item:selected { background-color: #3b82f6; color: white; }
+            """)
+            for p in comports:
+                device = p.device
+                desc = p.description or ""
+                label = f"{device} - {desc}" if desc and desc != "n/a" and device not in desc else device
+                act = menu.addAction(label)
+                act.triggered.connect(lambda checked, dev=device: self.txt_channel.setText(dev))
+
+            if len(comports) == 1:
+                self.txt_channel.setText(comports[0].device)
+            else:
+                menu.exec(self.btn_detect_ports.mapToGlobal(QPoint(0, self.btn_detect_ports.height())))
+        except Exception as e:
+            QMessageBox.warning(self, "Aviso", f"Não foi possível listar portas seriais: {e}")
+
     def _on_interface_changed(self):
-        """Auxilia na detecção de portas para interfaces seriais como SLCAN (CANable)."""
+        """Auxilia na detecção de portas para interfaces seriais como SLCAN (CANable) e SocketCAN."""
         iface = self.cb_interface.currentText()
-        if iface == "slcan":
+        is_socketcan = (iface == "socketcan")
+        is_slcan = (iface == "slcan")
+
+        if is_slcan:
+            self.lbl_interface_hint.setText("💡 <b>Makerbase CANable (SLCAN):</b> Porta serial COM (Windows) ou /dev/ttyACM (Linux). Não requer root.")
+            self.lbl_interface_hint.setVisible(True)
+            self.btn_detect_ports.setVisible(True)
             try:
                 import serial.tools.list_ports
                 ports = [p.device for p in serial.tools.list_ports.comports()]
                 if ports:
                     cur = self.txt_channel.text().strip()
-                    if not cur or cur == "can0":
+                    if not cur or cur == "can0" or cur.startswith("can"):
                         self.txt_channel.setText(ports[0])
                     self.txt_channel.setPlaceholderText(f"Portas detectadas: {', '.join(ports)}")
                 else:
                     self.txt_channel.setPlaceholderText("ex: COM3 (Win) ou /dev/ttyACM0 (Linux)")
             except Exception:
                 self.txt_channel.setPlaceholderText("ex: COM3 ou /dev/ttyACM0")
-        elif iface == "socketcan":
+        elif is_socketcan:
+            self.lbl_interface_hint.setText("💡 <b>SocketCAN:</b> Rede CAN nativa do kernel Linux (can0, can1, vcan0).")
+            self.lbl_interface_hint.setVisible(True)
+            self.btn_detect_ports.setVisible(False)
             self.txt_channel.setPlaceholderText("ex: can0, can1, vcan0")
-            if not self.txt_channel.text() or self.txt_channel.text().startswith("COM"):
+            if not self.txt_channel.text() or self.txt_channel.text().startswith("COM") or self.txt_channel.text().startswith("/dev"):
                 self.txt_channel.setText("can0")
+        elif iface == "gs_usb":
+            self.lbl_interface_hint.setText("💡 <b>candleLight / Makerbase (gs_usb):</b> Adaptador nativo USB (VID 1D50:606F). No Windows requer 'pip install gs-usb' e driver WinUSB.")
+            self.lbl_interface_hint.setVisible(True)
+            self.btn_detect_ports.setVisible(False)
+            cur = self.txt_channel.text().strip()
+            if not cur.isdigit():
+                self.txt_channel.setText("0")
+            self.txt_channel.setPlaceholderText("ex: 0 (Canal/Índice do dispositivo USB)")
+        else:
+            self.lbl_interface_hint.setVisible(False)
+            self.btn_detect_ports.setVisible(False)
+            self.txt_channel.setPlaceholderText("ex: 0, PCAN_USBBUS1")
 
-        is_socketcan = (iface == "socketcan")
         show_hw_controls = (self.cb_mode.currentIndex() == 0 or (self.cb_mode.currentIndex() == 2 and self.chk_transmit.isChecked()))
         self.set_row_visible(self.btn_manage_can, is_socketcan and show_hw_controls)
+        self.set_row_visible(self.btn_kill_can, is_socketcan and show_hw_controls)
 
     def _open_autodetect(self):
         dlg = BusDiscoveryDialog(
@@ -1077,6 +1161,8 @@ class ConnectionDialog(QDialog):
                     self.cb_bitrate.setCurrentText(str(cfg["bitrate"]))
 
     def set_row_visible(self, widget, visible):
+        if widget is self.txt_channel:
+            widget = self.chan_widget
         pos = self.layout.getWidgetPosition(widget)
         if pos:
             row = pos[0]
@@ -1094,10 +1180,12 @@ class ConnectionDialog(QDialog):
         is_sock = (self.cb_interface.currentText() == "socketcan")
 
         self.set_row_visible(self.cb_interface, is_hw)
-        self.set_row_visible(self.txt_channel, is_hw)
+        self.set_row_visible(self.chan_widget, is_hw)
+        self.set_row_visible(self.lbl_interface_hint, is_hw and bool(self.lbl_interface_hint.text()))
         self.set_row_visible(self.cb_bitrate, is_hw)
         self.set_row_visible(self.btn_autodetect, is_hw)
         self.set_row_visible(self.btn_manage_can, is_hw and is_sock)
+        self.set_row_visible(self.btn_kill_can, is_hw and is_sock)
         self.set_row_visible(self.btn_file, is_pb)
         self.set_row_visible(self.lbl_file, is_pb)
         self.set_row_visible(self.cb_playback_format, is_pb)
@@ -1109,17 +1197,21 @@ class ConnectionDialog(QDialog):
         if state == 2 and self.cb_mode.currentIndex() == 2:
             is_sock = (self.cb_interface.currentText() == "socketcan")
             self.set_row_visible(self.cb_interface, True)
-            self.set_row_visible(self.txt_channel, True)
+            self.set_row_visible(self.chan_widget, True)
+            self.set_row_visible(self.lbl_interface_hint, bool(self.lbl_interface_hint.text()))
             self.set_row_visible(self.cb_bitrate, True)
             self.set_row_visible(self.btn_autodetect, True)
             self.set_row_visible(self.btn_manage_can, is_sock)
+            self.set_row_visible(self.btn_kill_can, is_sock)
         else:
             if self.cb_mode.currentIndex() == 2:
                 self.set_row_visible(self.cb_interface, False)
-                self.set_row_visible(self.txt_channel, False)
+                self.set_row_visible(self.chan_widget, False)
+                self.set_row_visible(self.lbl_interface_hint, False)
                 self.set_row_visible(self.cb_bitrate, False)
                 self.set_row_visible(self.btn_autodetect, False)
                 self.set_row_visible(self.btn_manage_can, False)
+                self.set_row_visible(self.btn_kill_can, False)
 
     def select_file(self):
         file_name, _ = QFileDialog.getOpenFileName(

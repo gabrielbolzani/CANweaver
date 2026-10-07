@@ -52,6 +52,8 @@ set "MISSING=0"
 "%PYTHON_EXEC%" -c "import PyQt6" >nul 2>nul || set "MISSING=1"
 "%PYTHON_EXEC%" -c "import can" >nul 2>nul || set "MISSING=1"
 "%PYTHON_EXEC%" -c "import serial" >nul 2>nul || set "MISSING=1"
+"%PYTHON_EXEC%" -c "import gs_usb" >nul 2>nul || set "MISSING=1"
+"%PYTHON_EXEC%" -c "import usb.core" >nul 2>nul || set "MISSING=1"
 
 if "%MISSING%"=="1" (
     echo [INFO] Dependencias ausentes detectadas. Instalando automaticamente...
@@ -59,7 +61,7 @@ if "%MISSING%"=="1" (
     if exist "requirements.txt" (
         "%PIP_EXEC%" install -r requirements.txt
     ) else (
-        "%PIP_EXEC%" install PyQt6>=6.4.0 python-can>=4.2.0 pyserial>=3.5
+        "%PIP_EXEC%" install PyQt6>=6.4.0 python-can>=4.2.0 pyserial>=3.5 gs-usb>=0.3.1 pyusb>=1.2.1
     )
     if %errorlevel% neq 0 (
         echo [ERRO] Falha ao instalar dependencias necessarias.
