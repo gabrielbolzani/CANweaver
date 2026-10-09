@@ -3,13 +3,13 @@ widget_dialogs.py — Diálogos de configuração para os Widgets do Dashboard.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox,
     QSpinBox, QDoubleSpinBox, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QCheckBox,
     QColorDialog, QFrame, QSizePolicy, QWidget, QScrollArea, QGroupBox, QTabWidget
 )
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 
 
 # ---------------------------------------------------------------------------
@@ -622,11 +622,51 @@ class GaugeDialog(QDialog):
         self.chk_invert = QCheckBox("Inverter direção de crescimento gráfico")
         self.chk_invert.setChecked(config.get("invert_direction", False) if config else False)
 
-        self.sp_size = QSpinBox()
-        self.sp_size.setRange(40, 600)
-        self.sp_size.setValue(config.get("gauge_size", 160) if config else 160)
-        self.sp_size.setSuffix(" px")
-        self.sp_size.setSingleStep(self.grid_size)
+        self._is_editing = bool(config)
+
+        # Determina dimensões iniciais (largura e altura)
+        init_style = config.get("style", "Arco") if config else "Arco"
+        cfg_w = config.get("width") if config else None
+        cfg_h = config.get("height") if config else None
+        cfg_size = config.get("gauge_size", 160) if config else 160
+
+        if cfg_w is not None and cfg_h is not None and int(cfg_w) > 0 and int(cfg_h) > 0:
+            init_w = int(cfg_w)
+            init_h = int(cfg_h)
+        elif init_style == "Barra Horizontal":
+            init_w = int(cfg_size) if int(cfg_size) > 40 else 240
+            init_h = int(cfg_h) if cfg_h and int(cfg_h) > 0 else 60
+        elif init_style == "Barra Vertical":
+            init_w = int(cfg_w) if cfg_w and int(cfg_w) > 0 else 70
+            init_h = int(cfg_size) if int(cfg_size) > 60 else 220
+        elif init_style == "Texto Apenas":
+            init_w = int(cfg_size) if int(cfg_size) > 40 else 160
+            init_h = int(cfg_h) if cfg_h and int(cfg_h) > 0 else 60
+        else:  # Arco
+            init_w = int(cfg_size)
+            init_h = int(cfg_size) + 30
+
+        self.sp_width = QSpinBox()
+        self.sp_width.setRange(24, 2000)
+        self.sp_width.setValue(init_w)
+        self.sp_width.setSuffix(" px")
+        self.sp_width.setSingleStep(self.grid_size)
+
+        self.sp_height = QSpinBox()
+        self.sp_height.setRange(24, 2000)
+        self.sp_height.setValue(init_h)
+        self.sp_height.setSuffix(" px")
+        self.sp_height.setSingleStep(self.grid_size)
+
+        self.sp_size = self.sp_width
+
+        dim_layout = QHBoxLayout()
+        dim_layout.addWidget(QLabel("Largura:"))
+        dim_layout.addWidget(self.sp_width)
+        dim_layout.addWidget(QLabel("Altura:"))
+        dim_layout.addWidget(self.sp_height)
+
+        self.cb_style.currentIndexChanged.connect(self._on_style_changed)
 
         self.chk_snap_size = QCheckBox(f"Ajustar tamanho ao snap da grade ({self.grid_size} px)")
         self.chk_snap_size.setChecked(bool(config.get("snap_size", False)) if config else False)
@@ -647,7 +687,7 @@ class GaugeDialog(QDialog):
         form_visual.addRow("Faixa no Mostrador:", range_layout)
         form_visual.addRow("", self.chk_float)
         form_visual.addRow("", self.chk_invert)
-        form_visual.addRow("Tamanho:", self.sp_size)
+        form_visual.addRow("Dimensões (L × A):", dim_layout)
         form_visual.addRow("Snap de Grade:", self.chk_snap_size)
         form_visual.addRow("Decodificação Ativa:", self.lbl_signal_summary)
 
@@ -874,13 +914,33 @@ class GaugeDialog(QDialog):
         if self.chk_snap_size.isChecked():
             self._on_snap_toggled(True)
 
+    def _on_style_changed(self, idx: int):
+        if not getattr(self, "_is_editing", False):
+            style = self.cb_style.currentText()
+            if style == "Barra Horizontal":
+                self.sp_width.setValue(240)
+                self.sp_height.setValue(60)
+            elif style == "Barra Vertical":
+                self.sp_width.setValue(70)
+                self.sp_height.setValue(220)
+            elif style == "Texto Apenas":
+                self.sp_width.setValue(160)
+                self.sp_height.setValue(60)
+            else:  # Arco
+                self.sp_width.setValue(160)
+                self.sp_height.setValue(190)
+
     def _on_snap_toggled(self, checked: bool):
         if checked:
-            val = round(self.sp_size.value() / self.grid_size) * self.grid_size
-            self.sp_size.setValue(max(self.grid_size, val))
-            self.sp_size.setSingleStep(self.grid_size)
+            w = round(self.sp_width.value() / self.grid_size) * self.grid_size
+            h = round(self.sp_height.value() / self.grid_size) * self.grid_size
+            self.sp_width.setValue(max(self.grid_size, w))
+            self.sp_height.setValue(max(self.grid_size, h))
+            self.sp_width.setSingleStep(self.grid_size)
+            self.sp_height.setSingleStep(self.grid_size)
         else:
-            self.sp_size.setSingleStep(10)
+            self.sp_width.setSingleStep(10)
+            self.sp_height.setSingleStep(10)
 
     def _on_mode_changed(self, idx: int):
         is_factor = (idx == 0)
@@ -978,7 +1038,9 @@ class GaugeDialog(QDialog):
             "style": self.cb_style.currentText(),
             "can_id": can_id_str,
             "unit": self.txt_unit.text().strip(),
-            "gauge_size": self.sp_size.value(),
+            "width": self.sp_width.value(),
+            "height": self.sp_height.value(),
+            "gauge_size": max(self.sp_width.value(), self.sp_height.value()),
             "snap_size": self.chk_snap_size.isChecked(),
             "invert_direction": self.chk_invert.isChecked(),
             "show_float": self.chk_float.isChecked(),
@@ -1729,13 +1791,90 @@ class TerminalDialog(QDialog):
 # ShapeDialog
 # ---------------------------------------------------------------------------
 
+class ShapePreviewWidget(QWidget):
+    """Widget de pré-visualização ao vivo da forma geométrica no diálogo de configuração."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(120)
+        self.shape_type = "rectangle"
+        self.stroke_color = "#3b82f6"
+        self.stroke_width = 2
+        self.stroke_style = "solid"
+        self.fill_color = "transparent"
+        self.corner_radius = 0
+        self.orientation = "horizontal"
+        self.setStyleSheet("background-color: #18181b; border: 1px solid #27272a; border-radius: 6px;")
+
+    def update_params(self, shape_type, stroke_color, stroke_width, stroke_style, fill_color, corner_radius, orientation):
+        self.shape_type = shape_type
+        self.stroke_color = stroke_color
+        self.stroke_width = stroke_width
+        self.stroke_style = stroke_style
+        self.fill_color = fill_color
+        self.corner_radius = corner_radius
+        self.orientation = orientation
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Fundo do preview idêntico ao canvas do CANweaver
+        painter.fillRect(self.rect(), QColor("#18181b"))
+
+        pen_color = QColor(self.stroke_color) if self.stroke_color else QColor("#3b82f6")
+        pen = QPen(pen_color, max(1, min(12, self.stroke_width)))
+        if self.stroke_style == "dash":
+            pen.setStyle(Qt.PenStyle.DashLine)
+        elif self.stroke_style == "dot":
+            pen.setStyle(Qt.PenStyle.DotLine)
+        else:
+            pen.setStyle(Qt.PenStyle.SolidLine)
+        painter.setPen(pen)
+
+        if self.fill_color and self.fill_color.lower() not in ("transparent", "none", ""):
+            painter.setBrush(QBrush(QColor(self.fill_color)))
+        else:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        w = self.width()
+        h = self.height()
+        margin = max(16, int(self.stroke_width / 2.0) + 10)
+        rect = QRect(margin, margin, max(10, w - 2 * margin), max(10, h - 2 * margin))
+
+        if self.shape_type == "line":
+            if self.orientation == "horizontal":
+                y = h / 2.0
+                painter.drawLine(margin, int(y), w - margin, int(y))
+            elif self.orientation == "vertical":
+                x = w / 2.0
+                painter.drawLine(int(x), margin, int(x), h - margin)
+            elif self.orientation == "diagonal_up":
+                painter.drawLine(margin, h - margin, w - margin, margin)
+            else:
+                painter.drawLine(margin, margin, w - margin, h - margin)
+
+        elif self.shape_type == "circle":
+            painter.drawEllipse(rect)
+
+        else:  # rectangle ou rounded_rectangle
+            rad = self.corner_radius if self.shape_type == "rounded_rectangle" else (self.corner_radius or 0)
+            if self.shape_type == "rounded_rectangle" and rad <= 0:
+                rad = 16
+            if rad > 0:
+                scaled_rad = min(rad, int(min(rect.width(), rect.height()) / 2.0))
+                painter.drawRoundedRect(rect, scaled_rad, scaled_rad)
+            else:
+                painter.drawRect(rect)
+
+
 class ShapeDialog(QDialog):
-    """Diálogo para criação e edição de formas geométricas livres (Linha, Retângulo, Círculo)."""
+    """Diálogo para criação e edição de formas geométricas livres (Linha, Retângulo, Quadrado Arredondado, Círculo)."""
 
     def __init__(self, parent=None, config=None, default_shape="rectangle", grid_size=None, *args, **kwargs):
         super().__init__(parent)
         self.setWindowTitle("Configurar Forma Livre")
-        self.resize(440, 460)
+        self.resize(460, 560)
 
         self.grid_size = _get_grid_size(parent, grid_size)
 
@@ -1745,10 +1884,14 @@ class ShapeDialog(QDialog):
         # Tipo da Forma
         self.cb_shape_type = QComboBox()
         self.cb_shape_type.addItem("Retângulo / Quadrado", "rectangle")
+        self.cb_shape_type.addItem("Quadrado / Retângulo Arredondado", "rounded_rectangle")
         self.cb_shape_type.addItem("Círculo / Elipse", "circle")
         self.cb_shape_type.addItem("Linha", "line")
 
         init_shape = config.get("shape_type", default_shape) if config else default_shape
+        if init_shape == "rectangle" and config and int(config.get("corner_radius", 0)) > 0:
+            init_shape = "rounded_rectangle"
+
         idx = self.cb_shape_type.findData(init_shape)
         if idx >= 0:
             self.cb_shape_type.setCurrentIndex(idx)
@@ -1783,10 +1926,10 @@ class ShapeDialog(QDialog):
         self.chk_snap.setChecked(bool(config.get("snap_size", False)) if config else False)
         self.chk_snap.toggled.connect(self._on_snap_toggled)
 
-        # Cor do traço e espessura
+        # Cor do traço e espessura da borda
         init_stroke = config.get("stroke_color", "#3b82f6") if config else "#3b82f6"
         self.btn_stroke_color = _color_preview_btn(init_stroke, init_stroke)
-        self.btn_stroke_color.clicked.connect(lambda: self._pick_color(self.btn_stroke_color))
+        self.btn_stroke_color.clicked.connect(self._pick_stroke_color)
 
         self.sp_stroke_width = QSpinBox()
         self.sp_stroke_width.setRange(1, 40)
@@ -1802,22 +1945,38 @@ class ShapeDialog(QDialog):
             if idx_s >= 0:
                 self.cb_stroke_style.setCurrentIndex(idx_s)
 
-        # Preenchimento
+        # Preenchimento do Centro (Cor de dentro da forma)
         self.cb_fill_type = QComboBox()
-        self.cb_fill_type.addItem("Transparente (Vazado)", "transparent")
-        self.cb_fill_type.addItem("Cor Sólida", "solid")
+        self.cb_fill_type.addItem("Padrão: Sem Cor (Apenas Borda Vazada)", "transparent")
+        self.cb_fill_type.addItem("Cor Sólida (Preencher Centro da Forma)", "solid")
+
         init_fill = config.get("fill_color", "transparent") if config else "transparent"
-        if init_fill != "transparent":
+        self._current_fill_color = init_fill if (init_fill and init_fill != "transparent") else "#1e293b"
+        if init_fill and init_fill != "transparent":
             self.cb_fill_type.setCurrentIndex(1)
+        else:
+            self.cb_fill_type.setCurrentIndex(0)
 
-        fill_btn_color = init_fill if init_fill != "transparent" else "#1e293b"
-        self.btn_fill_color = _color_preview_btn(fill_btn_color, fill_btn_color)
-        self.btn_fill_color.clicked.connect(lambda: self._pick_color(self.btn_fill_color))
+        self.fill_container = QWidget()
+        fill_box = QHBoxLayout(self.fill_container)
+        fill_box.setContentsMargins(0, 0, 0, 0)
+        fill_box.setSpacing(6)
 
-        # Arredondamento
+        self.btn_fill_color = _color_preview_btn(self._current_fill_color, self._current_fill_color)
+        self.btn_fill_color.clicked.connect(self._pick_fill_color)
+        fill_box.addWidget(self.btn_fill_color, 1)
+
+        self.btn_clear_fill = QPushButton("❌ Sem Cor")
+        self.btn_clear_fill.setToolTip("Deixar o centro sem cor (apenas borda vazada)")
+        self.btn_clear_fill.setStyleSheet("background-color: #27272a; color: #ef4444; border: 1px solid #444; border-radius: 4px; padding: 4px 8px; font-size: 11px;")
+        self.btn_clear_fill.clicked.connect(self._clear_fill_color)
+        fill_box.addWidget(self.btn_clear_fill)
+
+        # Arredondamento (Raio dos cantos)
+        init_radius = int(config.get("corner_radius", 16 if init_shape == "rounded_rectangle" else 0)) if config else (16 if init_shape == "rounded_rectangle" else 0)
         self.sp_radius = QSpinBox()
         self.sp_radius.setRange(0, 100)
-        self.sp_radius.setValue(int(config.get("corner_radius", 0)) if config else 0)
+        self.sp_radius.setValue(init_radius)
         self.sp_radius.setSuffix(" px")
 
         self.form.addRow("Tipo de Forma:", self.cb_shape_type)
@@ -1825,14 +1984,22 @@ class ShapeDialog(QDialog):
         self.form.addRow("Largura:", self.sp_width)
         self.form.addRow("Altura:", self.sp_height)
         self.form.addRow("Snap de Tamanho:", self.chk_snap)
-        self.form.addRow("Cor da Linha/Borda:", self.btn_stroke_color)
-        self.form.addRow("Espessura:", self.sp_stroke_width)
+        self.form.addRow("Cor da Borda:", self.btn_stroke_color)
+        self.form.addRow("Espessura da Borda:", self.sp_stroke_width)
         self.form.addRow("Estilo do Traço:", self.cb_stroke_style)
         self.form.addRow("Preenchimento:", self.cb_fill_type)
-        self.form.addRow("Cor de Fundo:", self.btn_fill_color)
+        self.form.addRow("Cor do Centro:", self.fill_container)
         self.form.addRow("Raio dos Cantos:", self.sp_radius)
 
         outer.addLayout(self.form)
+
+        # Caixa de Pré-visualização ao vivo
+        preview_group = QGroupBox("Pré-visualização da Forma")
+        preview_layout = QVBoxLayout(preview_group)
+        preview_layout.setContentsMargins(6, 6, 6, 6)
+        self.preview_widget = ShapePreviewWidget(self)
+        preview_layout.addWidget(self.preview_widget)
+        outer.addWidget(preview_group)
 
         # Botões
         sep = QFrame()
@@ -1842,20 +2009,49 @@ class ShapeDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_ok = QPushButton("Salvar")
+        btn_ok.setStyleSheet("background-color: #3b82f6; color: white; padding: 6px 16px; border-radius: 4px; font-weight: bold;")
         btn_ok.clicked.connect(self.accept)
         btn_cancel = QPushButton("Cancelar")
+        btn_cancel.setStyleSheet("background-color: #27272a; color: white; padding: 6px 14px; border-radius: 4px;")
         btn_cancel.clicked.connect(self.reject)
         btn_row.addStretch()
         btn_row.addWidget(btn_ok)
         btn_row.addWidget(btn_cancel)
         outer.addLayout(btn_row)
 
-        self.cb_shape_type.currentIndexChanged.connect(self._update_visibility)
+        self.cb_shape_type.currentIndexChanged.connect(self._on_shape_type_changed)
         self.cb_fill_type.currentIndexChanged.connect(self._update_visibility)
+        self.sp_stroke_width.valueChanged.connect(self._update_preview)
+        self.cb_stroke_style.currentIndexChanged.connect(self._update_preview)
+        self.sp_radius.valueChanged.connect(self._update_preview)
+        self.cb_orientation.currentIndexChanged.connect(self._update_preview)
+
         self._update_visibility()
 
         if self.chk_snap.isChecked():
             self._on_snap_toggled(True)
+
+    def _on_shape_type_changed(self):
+        shape = self.cb_shape_type.currentData()
+        if shape == "rounded_rectangle" and self.sp_radius.value() <= 0:
+            self.sp_radius.setValue(16)
+        self._update_visibility()
+
+    def _pick_stroke_color(self):
+        _open_color_picker(self.btn_stroke_color, self)
+        self.btn_stroke_color.setText(self.btn_stroke_color._color)
+        self._update_preview()
+
+    def _pick_fill_color(self):
+        _open_color_picker(self.btn_fill_color, self)
+        self.btn_fill_color.setText(self.btn_fill_color._color)
+        self._current_fill_color = self.btn_fill_color._color
+        self.cb_fill_type.setCurrentIndex(1)  # muda para sólido
+        self._update_visibility()
+
+    def _clear_fill_color(self):
+        self.cb_fill_type.setCurrentIndex(0)  # transparente
+        self._update_visibility()
 
     def _on_snap_toggled(self, checked: bool):
         if checked:
@@ -1869,15 +2065,11 @@ class ShapeDialog(QDialog):
             self.sp_width.setSingleStep(10)
             self.sp_height.setSingleStep(10)
 
-    def _pick_color(self, btn: QPushButton):
-        _open_color_picker(btn, self)
-        btn.setText(btn._color)
-
     def _update_visibility(self):
         shape = self.cb_shape_type.currentData()
         is_line = (shape == "line")
-        is_rect = (shape == "rectangle")
-        fill_solid = (self.cb_fill_type.currentData() == "solid")
+        is_rect = (shape in ("rectangle", "rounded_rectangle"))
+        is_solid = (self.cb_fill_type.currentData() == "solid")
 
         def _set_row_visible(widget, visible):
             lbl = self.form.labelForField(widget)
@@ -1887,12 +2079,45 @@ class ShapeDialog(QDialog):
 
         _set_row_visible(self.cb_orientation, is_line)
         _set_row_visible(self.cb_fill_type, not is_line)
-        _set_row_visible(self.btn_fill_color, not is_line and fill_solid)
+        _set_row_visible(self.fill_container, not is_line)
         _set_row_visible(self.sp_radius, is_rect)
+
+        if is_solid:
+            _apply_color_style(self.btn_fill_color, self._current_fill_color)
+            self.btn_clear_fill.setVisible(True)
+        else:
+            self.btn_fill_color.setText("Sem Cor (Transparente)")
+            self.btn_fill_color.setStyleSheet(
+                "QPushButton { background-color: #27272a; color: #a1a1aa; border: 1px dashed #52525b; border-radius: 4px; padding: 0 8px; }"
+            )
+            self.btn_clear_fill.setVisible(False)
+
+        self._update_preview()
+
+    def _update_preview(self):
+        shape = self.cb_shape_type.currentData()
+        is_solid = (self.cb_fill_type.currentData() == "solid")
+        fill_col = self.btn_fill_color._color if (shape != "line" and is_solid) else "transparent"
+        rad = self.sp_radius.value() if shape in ("rectangle", "rounded_rectangle") else 0
+        if shape == "rounded_rectangle" and rad <= 0:
+            rad = 16
+        self.preview_widget.update_params(
+            shape_type=shape,
+            stroke_color=self.btn_stroke_color._color,
+            stroke_width=self.sp_stroke_width.value(),
+            stroke_style=self.cb_stroke_style.currentData(),
+            fill_color=fill_col,
+            corner_radius=rad,
+            orientation=self.cb_orientation.currentData()
+        )
 
     def get_config(self) -> dict:
         shape_type = self.cb_shape_type.currentData()
-        fill_color = self.btn_fill_color._color if (shape_type != "line" and self.cb_fill_type.currentData() == "solid") else "transparent"
+        is_solid = (self.cb_fill_type.currentData() == "solid")
+        fill_color = self.btn_fill_color._color if (shape_type != "line" and is_solid) else "transparent"
+        corner_radius = self.sp_radius.value() if shape_type in ("rectangle", "rounded_rectangle") else 0
+        if shape_type == "rounded_rectangle" and corner_radius <= 0:
+            corner_radius = 16
         return {
             "type": "shape",
             "shape_type": shape_type,
@@ -1904,7 +2129,7 @@ class ShapeDialog(QDialog):
             "stroke_width": self.sp_stroke_width.value(),
             "stroke_style": self.cb_stroke_style.currentData(),
             "fill_color": fill_color,
-            "corner_radius": self.sp_radius.value() if shape_type == "rectangle" else 0
+            "corner_radius": corner_radius
         }
 
 

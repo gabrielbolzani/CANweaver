@@ -29,6 +29,8 @@ ai_history.json
 # Pastas e widgets privados locais (Lume / Usuário - nunca subir ao Git)
 lume_widgets/
 lume_widgets/**
+lume_widgets.zip
+*.zip
 custom_widgets_private/
 custom_widgets/private/
 custom_widgets/lume/

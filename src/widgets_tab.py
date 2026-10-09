@@ -161,6 +161,30 @@ class CanvasWidget(QFrame):
         if getattr(self, "overlay", None):
             self.overlay.update()
 
+    def bring_selected_to_front(self):
+        """Traz todos os widgets selecionados para frente no canvas."""
+        self._clean_selected_widgets()
+        if not self.selected_widgets:
+            return
+        children = [c for c in self.children() if c in self.selected_widgets and is_widget_alive(c)]
+        for w in children:
+            w.raise_()
+        if getattr(self, "overlay", None):
+            self.overlay.raise_()
+            self.overlay.update()
+
+    def send_selected_to_back(self):
+        """Envia todos os widgets selecionados para trás no canvas."""
+        self._clean_selected_widgets()
+        if not self.selected_widgets:
+            return
+        children = [c for c in self.children() if c in self.selected_widgets and is_widget_alive(c)]
+        for w in reversed(children):
+            w.lower()
+        if getattr(self, "overlay", None):
+            self.overlay.raise_()
+            self.overlay.update()
+
     def keyPressEvent(self, event):
         parent_tab = self.parent()
         while parent_tab and not hasattr(parent_tab, "edit_mode"):
@@ -170,6 +194,12 @@ class CanvasWidget(QFrame):
         if is_edit:
             if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 self.delete_selected()
+                return
+            elif event.key() == Qt.Key.Key_PageUp:
+                self.bring_selected_to_front()
+                return
+            elif event.key() == Qt.Key.Key_PageDown:
+                self.send_selected_to_back()
                 return
             elif event.key() == Qt.Key.Key_A and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
                 self.select_all()
@@ -336,7 +366,6 @@ class DashboardWidget(QWidget):
             for w in list(target_set):
                 if is_widget_alive(w):
                     w._drag_start_pos = w.pos()
-                    w.raise_()
         else:
             super().mousePressEvent(event)
 
@@ -362,8 +391,14 @@ class DashboardWidget(QWidget):
                     snapped_y = new_pos.y()
 
                 if canvas:
-                    snapped_x = max(0, min(snapped_x, canvas.width() - w.width()))
-                    snapped_y = max(0, min(snapped_y, canvas.height() - w.height()))
+                    if canvas.width() > w.width():
+                        snapped_x = max(0, min(snapped_x, canvas.width() - w.width()))
+                    else:
+                        snapped_x = max(0, snapped_x)
+                    if canvas.height() > w.height():
+                        snapped_y = max(0, min(snapped_y, canvas.height() - w.height()))
+                    else:
+                        snapped_y = max(0, snapped_y)
                 w.move(snapped_x, snapped_y)
         else:
             super().mouseMoveEvent(event)
@@ -412,24 +447,26 @@ class DashboardWidget(QWidget):
         """Alinha a posição atual do widget para o múltiplo mais próximo da grade."""
         if not is_widget_alive(self):
             return
-        new_x = round(self.x() / grid_size) * grid_size
-        new_y = round(self.y() / grid_size) * grid_size
+        new_x = max(0, round(self.x() / grid_size) * grid_size)
+        new_y = max(0, round(self.y() / grid_size) * grid_size)
         parent = self.parent()
         if parent:
-            new_x = max(0, min(new_x, parent.width() - self.width()))
-            new_y = max(0, min(new_y, parent.height() - self.height()))
+            if parent.width() > self.width():
+                new_x = min(new_x, parent.width() - self.width())
+            if parent.height() > self.height():
+                new_y = min(new_y, parent.height() - self.height())
         self.move(new_x, new_y)
 
         # Se snap_size estiver ativo na config, trava também largura e altura em múltiplos do snap
         if isinstance(self.config, dict) and self.config.get("snap_size"):
-            if self.config.get("gauge_size"):
-                size = max(grid_size, round(int(self.config["gauge_size"]) / grid_size) * grid_size)
-                self.config["gauge_size"] = size
+            if self.config.get("type") == "gauge" or "gauge_size" in self.config:
                 style = self.config.get("style", "Arco")
-                if style == "Barra Horizontal":
-                    self.setFixedSize(size, max(60, size // 3) + 30)
-                else:
-                    self.setFixedSize(size, size + 30)
+                target_w = max(grid_size, round(self.width() / grid_size) * grid_size)
+                target_h = max(grid_size, round(self.height() / grid_size) * grid_size)
+                self.setFixedSize(target_w, target_h)
+                self.config["width"] = target_w
+                self.config["height"] = target_h
+                self.config["gauge_size"] = max(target_w, target_h)
             elif self.config.get("led_size"):
                 size = max(12, round(int(self.config["led_size"]) / grid_size) * grid_size)
                 self.config["led_size"] = size
@@ -482,6 +519,52 @@ class DashboardWidget(QWidget):
             if is_widget_alive(w) and hasattr(w, "duplicate_callback") and w.duplicate_callback:
                 w.duplicate_callback(w)
 
+    def bring_to_front(self):
+        """Traz o widget para frente de todos os outros widgets no canvas."""
+        if not is_widget_alive(self):
+            return
+        canvas = self.parent()
+        self.raise_()
+        if canvas and hasattr(canvas, "overlay") and canvas.overlay is not None:
+            canvas.overlay.raise_()
+            canvas.overlay.update()
+        self.update()
+
+    def send_to_back(self):
+        """Envia o widget para trás de todos os outros widgets no canvas."""
+        if not is_widget_alive(self):
+            return
+        self.lower()
+        canvas = self.parent()
+        if canvas and hasattr(canvas, "overlay") and canvas.overlay is not None:
+            canvas.overlay.raise_()
+            canvas.overlay.update()
+        self.update()
+
+    def _bring_group_to_front(self, group):
+        """Traz todos os widgets do grupo para frente, preservando a ordem relativa entre eles."""
+        canvas = self.parent()
+        if not canvas:
+            return
+        children = [c for c in canvas.children() if c in group and is_widget_alive(c)]
+        for w in children:
+            w.raise_()
+        if hasattr(canvas, "overlay") and canvas.overlay is not None:
+            canvas.overlay.raise_()
+            canvas.overlay.update()
+
+    def _send_group_to_back(self, group):
+        """Envia todos os widgets do grupo para trás, preservando a ordem relativa entre eles."""
+        canvas = self.parent()
+        if not canvas:
+            return
+        children = [c for c in canvas.children() if c in group and is_widget_alive(c)]
+        for w in reversed(children):
+            w.lower()
+        if hasattr(canvas, "overlay") and canvas.overlay is not None:
+            canvas.overlay.raise_()
+            canvas.overlay.update()
+
     def show_context_menu(self, global_pos: QPoint | None = None):
         if global_pos is None:
             global_pos = get_event_global_pos()
@@ -498,6 +581,12 @@ class DashboardWidget(QWidget):
 
         if len(selected) > 1 and self in selected:
             # Ações em lote para múltiplos widgets selecionados
+            action_front_all = QAction(f"Trazer Selecionados para Frente ({len(selected)} itens)", self)
+            action_front_all.triggered.connect(lambda: self._bring_group_to_front(selected))
+
+            action_back_all = QAction(f"Enviar Selecionados para Trás ({len(selected)} itens)", self)
+            action_back_all.triggered.connect(lambda: self._send_group_to_back(selected))
+
             grid_size = getattr(canvas, "grid_size", 20)
             action_snap_all = QAction(f"Alinhar Selecionados à Grade ({len(selected)} itens)", self)
             action_snap_all.triggered.connect(lambda: [w.snap_to_grid(grid_size) for w in selected if is_widget_alive(w)])
@@ -511,6 +600,9 @@ class DashboardWidget(QWidget):
             action_del_all = QAction(f"Excluir Selecionados ({len(selected)} itens)", self)
             action_del_all.triggered.connect(lambda: self._delete_group(selected))
 
+            menu.addAction(action_front_all)
+            menu.addAction(action_back_all)
+            menu.addSeparator()
             menu.addAction(action_snap_all)
             menu.addAction(action_center_all)
             menu.addSeparator()
@@ -520,6 +612,12 @@ class DashboardWidget(QWidget):
             # Ações individuais
             action_edit = QAction("Editar Widget", self)
             action_edit.triggered.connect(lambda: self.edit_callback(self) if callable(getattr(self, "edit_callback", None)) else None)
+
+            action_front = QAction("Trazer para Frente", self)
+            action_front.triggered.connect(self.bring_to_front)
+
+            action_back = QAction("Enviar para Trás", self)
+            action_back.triggered.connect(self.send_to_back)
 
             action_center = QAction("Centralizar na Horizontal", self)
             action_center.triggered.connect(self.center_horizontally)
@@ -538,6 +636,9 @@ class DashboardWidget(QWidget):
             action_del.triggered.connect(self._delete_self)
 
             menu.addAction(action_edit)
+            menu.addSeparator()
+            menu.addAction(action_front)
+            menu.addAction(action_back)
             menu.addSeparator()
             menu.addAction(action_center)
             menu.addAction(action_full_width)
@@ -767,9 +868,6 @@ class SelectionOverlay(QWidget):
                 self._drag_start_positions = {
                     item: item.pos() for item in self.canvas.selected_widgets if is_widget_alive(item)
                 }
-                for item in self.canvas.selected_widgets:
-                    if is_widget_alive(item):
-                        item.raise_()
                 self.raise_()
                 self.update()
                 return
@@ -824,8 +922,14 @@ class SelectionOverlay(QWidget):
                 else:
                     snapped_x = new_pos.x()
                     snapped_y = new_pos.y()
-                snapped_x = max(0, min(snapped_x, self.canvas.width() - w.width()))
-                snapped_y = max(0, min(snapped_y, self.canvas.height() - w.height()))
+                if self.canvas.width() > w.width():
+                    snapped_x = max(0, min(snapped_x, self.canvas.width() - w.width()))
+                else:
+                    snapped_x = max(0, snapped_x)
+                if self.canvas.height() > w.height():
+                    snapped_y = max(0, min(snapped_y, self.canvas.height() - w.height()))
+                else:
+                    snapped_y = max(0, snapped_y)
                 w.move(snapped_x, snapped_y)
             self.update()
             return
@@ -1241,6 +1345,7 @@ class GaugeWidget(DashboardWidget):
         except (ValueError, TypeError):
             self.config["display_max"] = self.config["val_max_conv"]
 
+        has_explicit_size = ("gauge_size" in self.config)
         try:
             self.config["gauge_size"] = int(self.config.get("gauge_size", 160))
         except (ValueError, TypeError):
@@ -1257,12 +1362,48 @@ class GaugeWidget(DashboardWidget):
         else:
             self._raw_value = self.config["val_min_raw"]
 
-        size = self.config["gauge_size"]
         style = self.config.get("style", "Arco")
-        if style == "Barra Horizontal":
-            self.setFixedSize(size, max(60, size // 3) + 30)
+        cfg_w = self.config.get("width")
+        cfg_h = self.config.get("height")
+        gauge_size = self.config["gauge_size"]
+
+        if cfg_w is not None and cfg_h is not None and int(cfg_w) > 0 and int(cfg_h) > 0:
+            w = int(cfg_w)
+            h = int(cfg_h)
+        elif has_explicit_size:
+            if style == "Barra Horizontal":
+                w = int(gauge_size)
+                h = int(cfg_h) if cfg_h and int(cfg_h) > 0 else 60
+            elif style == "Barra Vertical":
+                w = int(cfg_w) if cfg_w and int(cfg_w) > 0 else 70
+                h = int(gauge_size) if int(gauge_size) > 60 else 220
+            elif style == "Texto Apenas":
+                w = int(gauge_size)
+                h = int(cfg_h) if cfg_h and int(cfg_h) > 0 else 60
+            else:  # Arco
+                w = int(gauge_size)
+                h = int(gauge_size) + 30
         else:
-            self.setFixedSize(size, size + 30)
+            # Padrões dedicados por estilo quando nenhuma dimensão foi especificada
+            if style == "Barra Horizontal":
+                w = 240
+                h = 60
+            elif style == "Barra Vertical":
+                w = 70
+                h = 220
+            elif style == "Texto Apenas":
+                w = 160
+                h = 60
+            else:  # Arco
+                w = 160
+                h = 190
+
+        w = max(24, w)
+        h = max(24, h)
+        self.setFixedSize(w, h)
+        self.config["width"] = w
+        self.config["height"] = h
+        self.config["gauge_size"] = max(w, h)
 
         self._update_tooltip()
 
@@ -1290,10 +1431,10 @@ class GaugeWidget(DashboardWidget):
     def apply_resized_geometry(self, new_geom: QRect):
         super().apply_resized_geometry(new_geom)
         style = self.config.get("style", "Arco")
-        if style == "Barra Horizontal":
-            self.config["gauge_size"] = max(40, self.width())
+        if style == "Arco":
+            self.config["gauge_size"] = max(40, min(self.width(), self.height()))
         else:
-            self.config["gauge_size"] = max(40, min(self.width(), self.height() - 30))
+            self.config["gauge_size"] = max(self.width(), self.height())
         self.update()
 
     def _get_conv_value(self) -> float:
@@ -1367,11 +1508,16 @@ class GaugeWidget(DashboardWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        size = self.config.get("gauge_size", 160)
+        W = self.width()
+        H = self.height()
+        if W <= 0 or H <= 0:
+            return
+
         style = self.config.get("style", "Arco")
         name = self.config.get("name", "")
         unit = self.config.get("unit", "")
         show_float = self.config.get("show_float", False)
+        invert = self.config.get("invert_direction", False)
         
         mode = self.config.get("conversion_mode", "factor_offset")
         if mode == "factor_offset":
@@ -1406,139 +1552,255 @@ class GaugeWidget(DashboardWidget):
             g = int(220 * (1 - (ratio - 0.5) * 2))
         bar_color = QColor(r, g, 60)
 
-        # Draw Title
-        painter.setPen(QColor("#a1a1aa"))
-        font_name = QFont()
-        font_name.setPixelSize(max(8, size // 14))
-        painter.setFont(font_name)
         if style == "Barra Horizontal":
-            widget_h = max(60, size // 3)
-            painter.drawText(0, widget_h + 4, size, 24, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, name)
-        else:
-            painter.drawText(0, size + 4, size, 24, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, name)
-            
-        invert = self.config.get("invert_direction", False)
+            pad_x = max(6, min(14, int(W * 0.03)))
+            avail_w = max(10, W - (pad_x * 2))
 
-        if style == "Arco":
-            margin = max(10, size // 15)
-            cx = size // 2
-            cy = size // 2
-            radius = (size // 2) - margin
-            pen_width = max(6, size // 12)
+            if H >= 42:
+                # Linha de cabeçalho: Nome (esquerda) e Valor (direita)
+                hdr_h = min(22, max(14, int(H * 0.32)))
+                y_hdr = 2
+                
+                painter.setPen(QColor("#a1a1aa"))
+                font_name = QFont()
+                font_name.setPixelSize(min(13, max(8, int(hdr_h * 0.75))))
+                painter.setFont(font_name)
+                name_w = int(avail_w * 0.58)
+                painter.drawText(pad_x, y_hdr, name_w, hdr_h,
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
 
-            # Arco de fundo
+                painter.setPen(QColor("#ffffff"))
+                font_val = QFont()
+                font_val.setPixelSize(min(14, max(9, int(hdr_h * 0.85))))
+                font_val.setBold(True)
+                painter.setFont(font_val)
+                val_w = avail_w - name_w
+                painter.drawText(pad_x + name_w, y_hdr, val_w, hdr_h,
+                                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, val_text)
+
+                # Barra horizontal inferior
+                y_bar = y_hdr + hdr_h + 3
+                h_bar = max(6, H - y_bar - 4)
+                radius = min(4, max(2, h_bar // 2))
+
+                painter.setBrush(QBrush(QColor("#27272a")))
+                painter.setPen(QPen(QColor("#3f3f46"), 1))
+                painter.drawRoundedRect(pad_x, y_bar, avail_w, h_bar, radius, radius)
+
+                w_fill = int(avail_w * ratio)
+                if w_fill > 0:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QBrush(bar_color))
+                    if invert:
+                        painter.drawRoundedRect(pad_x + avail_w - w_fill, y_bar, w_fill, h_bar, radius, radius)
+                    else:
+                        painter.drawRoundedRect(pad_x, y_bar, w_fill, h_bar, radius, radius)
+            else:
+                # Barra compacta (H < 42) com texto sobreposto
+                pad_y = 2
+                h_bar = max(6, H - (pad_y * 2))
+                radius = min(4, max(2, h_bar // 2))
+
+                painter.setBrush(QBrush(QColor("#27272a")))
+                painter.setPen(QPen(QColor("#3f3f46"), 1))
+                painter.drawRoundedRect(pad_x, pad_y, avail_w, h_bar, radius, radius)
+
+                w_fill = int(avail_w * ratio)
+                if w_fill > 0:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QBrush(bar_color))
+                    if invert:
+                        painter.drawRoundedRect(pad_x + avail_w - w_fill, pad_y, w_fill, h_bar, radius, radius)
+                    else:
+                        painter.drawRoundedRect(pad_x, pad_y, w_fill, h_bar, radius, radius)
+
+                label_txt = f"{name}: {val_text}" if name else val_text
+                painter.setPen(QColor("#ffffff"))
+                font_val = QFont()
+                font_val.setPixelSize(min(13, max(8, h_bar - 4)))
+                font_val.setBold(True)
+                painter.setFont(font_val)
+                painter.drawText(pad_x, pad_y, avail_w, h_bar,
+                                 Qt.AlignmentFlag.AlignCenter, label_txt)
+
+        elif style == "Barra Vertical":
+            if H >= 60:
+                # Topo: Nome
+                if name:
+                    hdr_h = min(20, max(12, int(H * 0.08)))
+                    y_hdr = 2
+                    painter.setPen(QColor("#a1a1aa"))
+                    font_name = QFont()
+                    font_name.setPixelSize(min(12, max(8, int(W / 5), int(hdr_h * 0.8))))
+                    painter.setFont(font_name)
+                    painter.drawText(2, y_hdr, W - 4, hdr_h,
+                                     Qt.AlignmentFlag.AlignCenter, name)
+                    y_bar_top = y_hdr + hdr_h + 3
+                else:
+                    y_bar_top = 4
+
+                # Base: Valor numérico
+                val_h = min(24, max(14, int(H * 0.10)))
+                y_val = H - val_h - 2
+                painter.setPen(QColor("#ffffff"))
+                font_val = QFont()
+                font_val.setPixelSize(min(14, max(9, int(W / 4.5), int(val_h * 0.85))))
+                font_val.setBold(True)
+                painter.setFont(font_val)
+                painter.drawText(2, y_val, W - 4, val_h,
+                                 Qt.AlignmentFlag.AlignCenter, val_text)
+
+                # Trilho vertical central
+                y_bar = y_bar_top
+                h_bar = max(10, y_val - 3 - y_bar)
+
+                if W <= 40:
+                    w_bar = max(8, W - 8)
+                elif W <= 100:
+                    w_bar = max(16, min(W - 12, int(W * 0.70)))
+                else:
+                    w_bar = max(24, min(W - 20, int(W * 0.55)))
+
+                x_bar = (W - w_bar) // 2
+                radius = min(4, max(2, w_bar // 2))
+
+                painter.setBrush(QBrush(QColor("#27272a")))
+                painter.setPen(QPen(QColor("#3f3f46"), 1))
+                painter.drawRoundedRect(x_bar, y_bar, w_bar, h_bar, radius, radius)
+
+                h_fill = int(h_bar * ratio)
+                if h_fill > 0:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QBrush(bar_color))
+                    if invert:
+                        painter.drawRoundedRect(x_bar, y_bar, w_bar, h_fill, radius, radius)
+                    else:
+                        painter.drawRoundedRect(x_bar, y_bar + h_bar - h_fill, w_bar, h_fill, radius, radius)
+            else:
+                # Barra vertical curta (H < 60)
+                pad_y = 2
+                h_bar = max(6, H - (pad_y * 2))
+                w_bar = max(8, W - 8)
+                x_bar = (W - w_bar) // 2
+                radius = min(4, max(2, w_bar // 2))
+
+                painter.setBrush(QBrush(QColor("#27272a")))
+                painter.setPen(QPen(QColor("#3f3f46"), 1))
+                painter.drawRoundedRect(x_bar, pad_y, w_bar, h_bar, radius, radius)
+
+                h_fill = int(h_bar * ratio)
+                if h_fill > 0:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QBrush(bar_color))
+                    if invert:
+                        painter.drawRoundedRect(x_bar, pad_y, w_bar, h_fill, radius, radius)
+                    else:
+                        painter.drawRoundedRect(x_bar, pad_y + h_bar - h_fill, w_bar, h_fill, radius, radius)
+
+                painter.setPen(QColor("#ffffff"))
+                font_val = QFont()
+                font_val.setPixelSize(min(12, max(8, h_bar // 2)))
+                font_val.setBold(True)
+                painter.setFont(font_val)
+                painter.drawText(0, pad_y, W, h_bar,
+                                 Qt.AlignmentFlag.AlignCenter, val_text)
+
+        elif style == "Arco":
+            hdr_h = min(22, max(14, int(H * 0.14)))
+            y_title = H - hdr_h - 2
+            painter.setPen(QColor("#a1a1aa"))
+            font_name = QFont()
+            font_name.setPixelSize(min(13, max(8, int(hdr_h * 0.8))))
+            painter.setFont(font_name)
+            painter.drawText(0, y_title, W, hdr_h,
+                             Qt.AlignmentFlag.AlignCenter, name)
+
+            avail_h = max(20, y_title - 2)
+            avail_w = W
+            arc_size = min(avail_w, avail_h)
+            cx = W // 2
+            cy = avail_h // 2
+            margin = max(6, arc_size // 15)
+            radius = (arc_size // 2) - margin
+            pen_width = max(4, arc_size // 12)
+
             pen_bg = QPen(QColor("#3f3f46"), pen_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
             painter.setPen(pen_bg)
             start_angle = 225 * 16
             span_angle  = -270 * 16
-            painter.drawArc(cx - radius, margin, radius * 2, radius * 2, start_angle, span_angle)
+            painter.drawArc(cx - radius, cy - radius, radius * 2, radius * 2, start_angle, span_angle)
 
-            # Arco de valor
             pen_val = QPen(bar_color, pen_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
             painter.setPen(pen_val)
             if invert:
-                painter.drawArc(cx - radius, margin, radius * 2, radius * 2,
+                painter.drawArc(cx - radius, cy - radius, radius * 2, radius * 2,
                                 start_angle + span_angle, -int(span_angle * ratio))
                 angle_deg = 225 - 270 + ratio * 270
             else:
-                painter.drawArc(cx - radius, margin, radius * 2, radius * 2,
+                painter.drawArc(cx - radius, cy - radius, radius * 2, radius * 2,
                                 start_angle, int(span_angle * ratio))
                 angle_deg = 225 - ratio * 270
 
-            # Ponteiro
             angle_rad = math.radians(angle_deg)
-            needle_len = radius - pen_width - (size // 20)
+            needle_len = max(4, radius - pen_width - (arc_size // 20))
             nx = cx + needle_len * math.cos(angle_rad)
             ny = cy - needle_len * math.sin(angle_rad)
-            painter.setPen(QPen(QColor("#ffffff"), max(2, size // 50), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.setPen(QPen(QColor("#ffffff"), max(2, arc_size // 50), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.drawLine(int(cx), int(cy), int(nx), int(ny))
 
-            # Ponto central
             painter.setBrush(QBrush(QColor("#a1a1aa")))
             painter.setPen(Qt.PenStyle.NoPen)
-            center_dot = max(6, size // 15)
+            center_dot = max(4, arc_size // 15)
             painter.drawEllipse(cx - center_dot // 2, cy - center_dot // 2, center_dot, center_dot)
 
-            # Valor numérico
             painter.setPen(QColor("#ffffff"))
             font_val = QFont()
-            font_val.setPixelSize(max(10, size // 8))
+            font_val.setPixelSize(min(26, max(10, arc_size // 7)))
             font_val.setBold(True)
             painter.setFont(font_val)
-            painter.drawText(0, cy + radius // 3, size, 30,
+            painter.drawText(cx - arc_size // 2, cy + radius // 4, arc_size, 26,
                              Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, val_text)
 
-            # Min/Max labels
             painter.setPen(QColor("#71717a"))
             font_mm = QFont()
-            font_mm.setPixelSize(max(8, size // 14))
+            font_mm.setPixelSize(min(11, max(7, arc_size // 16)))
             painter.setFont(font_mm)
             txt_min = f"{c_min:.1f}" if show_float else f"{int(c_min)}"
             txt_max = f"{c_max:.1f}" if show_float else f"{int(c_max)}"
-            lbl_w = max(50, size // 3)
-            painter.drawText(margin, size - 18, lbl_w, 16,
+            lbl_w = max(40, arc_size // 3)
+            painter.drawText(cx - radius, cy + radius // 2 + 4, lbl_w, 16,
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, txt_min)
-            painter.drawText(size - margin - lbl_w, size - 18, lbl_w, 16,
+            painter.drawText(cx + radius - lbl_w, cy + radius // 2 + 4, lbl_w, 16,
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, txt_max)
 
-        elif style == "Barra Horizontal":
-            bar_h = max(20, size // 6)
-            widget_h = max(60, size // 3)
-            bar_y = (widget_h - bar_h) // 2
-            painter.setBrush(QBrush(QColor("#3f3f46")))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(10, bar_y, size - 20, bar_h, 4, 4)
-
-            w_fill = int((size - 20) * ratio)
-            if w_fill > 0:
-                painter.setBrush(QBrush(bar_color))
-                if invert:
-                    painter.drawRoundedRect(10 + (size - 20) - w_fill, bar_y, w_fill, bar_h, 4, 4)
-                else:
-                    painter.drawRoundedRect(10, bar_y, w_fill, bar_h, 4, 4)
-
-            painter.setPen(QColor("#ffffff"))
-            font_val = QFont()
-            font_val.setPixelSize(max(10, size // 8))
-            font_val.setBold(True)
-            painter.setFont(font_val)
-            painter.drawText(10, bar_y, size - 20, bar_h,
-                             Qt.AlignmentFlag.AlignCenter, val_text)
-
-        elif style == "Barra Vertical":
-            bar_w = max(20, size // 6)
-            bar_x = (size - bar_w) // 2
-            bar_h = size - 30
-            bar_y = 10
-            
-            painter.setBrush(QBrush(QColor("#3f3f46")))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 4, 4)
-
-            h_fill = int(bar_h * ratio)
-            if h_fill > 0:
-                painter.setBrush(QBrush(bar_color))
-                if invert:
-                    painter.drawRoundedRect(bar_x, bar_y, bar_w, h_fill, 4, 4)
-                else:
-                    painter.drawRoundedRect(bar_x, bar_y + bar_h - h_fill, bar_w, h_fill, 4, 4)
-
-            painter.setPen(QColor("#ffffff"))
-            font_val = QFont()
-            font_val.setPixelSize(max(10, size // 10))
-            font_val.setBold(True)
-            painter.setFont(font_val)
-            painter.drawText(0, bar_y + bar_h // 2 - 15, size, 30,
-                             Qt.AlignmentFlag.AlignCenter, val_text)
-
         elif style == "Texto Apenas":
-            painter.setPen(bar_color)
-            font_val = QFont()
-            font_val.setPixelSize(max(14, size // 4))
-            font_val.setBold(True)
-            painter.setFont(font_val)
-            painter.drawText(0, 0, size, size,
-                             Qt.AlignmentFlag.AlignCenter, val_text)
+            if name and H >= 36:
+                hdr_h = min(20, max(12, int(H * 0.28)))
+                painter.setPen(QColor("#a1a1aa"))
+                font_name = QFont()
+                font_name.setPixelSize(min(13, max(8, int(hdr_h * 0.8))))
+                painter.setFont(font_name)
+                painter.drawText(4, 2, W - 8, hdr_h,
+                                 Qt.AlignmentFlag.AlignCenter, name)
+
+                val_y = 2 + hdr_h + 2
+                val_h = H - val_y - 2
+                painter.setPen(bar_color)
+                font_val = QFont()
+                font_val.setPixelSize(min(42, max(12, int(val_h * 0.7), int(W / 6))))
+                font_val.setBold(True)
+                painter.setFont(font_val)
+                painter.drawText(4, val_y, W - 8, val_h,
+                                 Qt.AlignmentFlag.AlignCenter, val_text)
+            else:
+                painter.setPen(bar_color)
+                font_val = QFont()
+                font_val.setPixelSize(min(48, max(12, int(H * 0.6), int(W / 6))))
+                font_val.setBold(True)
+                painter.setFont(font_val)
+                label_txt = f"{name}: {val_text}" if (name and H < 36) else val_text
+                painter.drawText(0, 0, W, H,
+                                 Qt.AlignmentFlag.AlignCenter, label_txt)
 
 
 class ControllerWidget(DashboardWidget):
@@ -2247,7 +2509,7 @@ class TerminalWidget(DashboardWidget):
 
 
 class ShapeWidget(DashboardWidget):
-    """Widget de forma geométrica livre (Linha, Retângulo / Quadrado, Círculo / Elipse)."""
+    """Widget de forma geométrica livre (Linha, Retângulo / Quadrado, Círculo / Elipse, Quadrado Arredondado)."""
 
     def __init__(self, parent, config):
         super().__init__(parent, config)
@@ -2257,7 +2519,9 @@ class ShapeWidget(DashboardWidget):
         self.stroke_width = int(config.get("stroke_width", 2))
         self.stroke_style = str(config.get("stroke_style", "solid"))
         self.fill_color = str(config.get("fill_color", "transparent"))
-        self.corner_radius = int(config.get("corner_radius", 0))
+        self.corner_radius = int(config.get("corner_radius", 16 if self.shape_type == "rounded_rectangle" else 0))
+        if self.shape_type == "rounded_rectangle" and self.corner_radius <= 0:
+            self.corner_radius = 16
 
         w = int(config.get("width", 160))
         h = int(config.get("height", 160 if self.shape_type != "line" else 20))
@@ -2279,8 +2543,8 @@ class ShapeWidget(DashboardWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Configura caneta de contorno/linha
-        pen_color = QColor(self.stroke_color)
-        pen = QPen(pen_color, self.stroke_width)
+        pen_color = QColor(self.stroke_color) if self.stroke_color else QColor("#3b82f6")
+        pen = QPen(pen_color, max(1, self.stroke_width))
         if self.stroke_style == "dash":
             pen.setStyle(Qt.PenStyle.DashLine)
         elif self.stroke_style == "dot":
@@ -2289,8 +2553,8 @@ class ShapeWidget(DashboardWidget):
             pen.setStyle(Qt.PenStyle.SolidLine)
         painter.setPen(pen)
 
-        # Configura preenchimento
-        if self.fill_color and self.fill_color != "transparent":
+        # Configura preenchimento (cor do centro ou sem cor)
+        if self.fill_color and self.fill_color.lower() not in ("transparent", "none", ""):
             painter.setBrush(QBrush(QColor(self.fill_color)))
         else:
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -2318,13 +2582,25 @@ class ShapeWidget(DashboardWidget):
             )
             painter.drawEllipse(rect)
 
+        elif self.shape_type == "rounded_rectangle":
+            rect = QRect(
+                int(half_pen), int(half_pen),
+                max(2, int(w - self.stroke_width)), max(2, int(h - self.stroke_width))
+            )
+            rad = self.corner_radius if self.corner_radius > 0 else 16
+            max_rad = int(min(rect.width(), rect.height()) / 2.0)
+            rad = min(rad, max_rad)
+            painter.drawRoundedRect(rect, rad, rad)
+
         else:  # rectangle / quadrado
             rect = QRect(
                 int(half_pen), int(half_pen),
                 max(2, int(w - self.stroke_width)), max(2, int(h - self.stroke_width))
             )
             if self.corner_radius > 0:
-                painter.drawRoundedRect(rect, self.corner_radius, self.corner_radius)
+                max_rad = int(min(rect.width(), rect.height()) / 2.0)
+                rad = min(self.corner_radius, max_rad)
+                painter.drawRoundedRect(rect, rad, rad)
             else:
                 painter.drawRect(rect)
 
@@ -2409,9 +2685,11 @@ class CustomPythonDashboardWidget(DashboardWidget):
 
             # Dimensões salvas ou padrão da classe
             default_w, default_h = getattr(widget_cls, "DEFAULT_SIZE", (280, 200))
-            w = self.config.get("width", default_w)
-            h = self.config.get("height", default_h)
-            self.resize(int(w), int(h))
+            w = int(self.config.get("width", default_w))
+            h = int(self.config.get("height", default_h))
+            self.config["width"] = w
+            self.config["height"] = h
+            self.setFixedSize(w, h)
 
             # Restaura configurações personalizadas
             custom_cfg = self.config.get("custom_config")
@@ -2605,11 +2883,15 @@ class WidgetsTab(QWidget):
         action_shape_rect = QAction("Retângulo / Quadrado", self)
         action_shape_rect.triggered.connect(lambda: self.add_shape(pos, "rectangle"))
 
+        action_shape_rounded = QAction("Quadrado / Retângulo Arredondado", self)
+        action_shape_rounded.triggered.connect(lambda: self.add_shape(pos, "rounded_rectangle"))
+
         action_shape_circ = QAction("Círculo / Elipse", self)
         action_shape_circ.triggered.connect(lambda: self.add_shape(pos, "circle"))
 
         menu_shapes.addAction(action_shape_line)
         menu_shapes.addAction(action_shape_rect)
+        menu_shapes.addAction(action_shape_rounded)
         menu_shapes.addAction(action_shape_circ)
 
         # Submenu de Widgets Customizados em Python
@@ -2895,7 +3177,7 @@ class WidgetsTab(QWidget):
             remove_custom_widget_directory(folder_path)
             QMessageBox.information(self, "Pasta Removida", f"A pasta '{bname}' foi desvinculada do menu.")
 
-    def _place_widget(self, w: DashboardWidget, pos):
+    def _place_widget(self, w: DashboardWidget, pos, snap: bool = True):
         w.edit_callback = self._edit_widget
         w.duplicate_callback = self._duplicate_widget
         if w.config:
@@ -2906,7 +3188,7 @@ class WidgetsTab(QWidget):
         w.show()
         w.move(pos)
         w.set_edit_mode(self.edit_mode)
-        if w.config and w.config.get("snap_size") and self.canvas.snap_to_grid:
+        if snap and w.config and w.config.get("snap_size") and self.canvas.snap_to_grid:
             w.snap_to_grid(self.canvas.grid_size)
         if getattr(self.canvas, "overlay", None) and self.edit_mode:
             self.canvas.overlay.raise_()
@@ -3046,8 +3328,12 @@ class WidgetsTab(QWidget):
 
     def export_data(self):
         widgets_data = []
-        for w in self.canvas.findChildren(DashboardWidget):
-            if is_widget_alive(w) and hasattr(w, "config") and isinstance(w.config, dict):
+        children_widgets = [
+            c for c in self.canvas.children()
+            if isinstance(c, DashboardWidget) and is_widget_alive(c)
+        ]
+        for w in children_widgets:
+            if hasattr(w, "config") and isinstance(w.config, dict):
                 cfg = w.config.copy()
                 cfg["pos_x"] = w.pos().x()
                 cfg["pos_y"] = w.pos().y()
@@ -3096,7 +3382,7 @@ class WidgetsTab(QWidget):
                 widget = CustomPythonDashboardWidget(self.canvas, cfg, self.can_thread)
             else:
                 continue
-            self._place_widget(widget, pos)
+            self._place_widget(widget, pos, snap=False)
 
     def add_widget_from_config(self, cfg: dict):
         """Insere um novo widget no Canvas a partir de um dicionário de configuração (usado pelo CAN Copilot)."""
@@ -3125,7 +3411,8 @@ class WidgetsTab(QWidget):
         else:
             return None
 
-        self._place_widget(widget, pos)
+        has_pos = ("pos_x" in cfg and "pos_y" in cfg)
+        self._place_widget(widget, pos, snap=not has_pos)
         return widget
 
 

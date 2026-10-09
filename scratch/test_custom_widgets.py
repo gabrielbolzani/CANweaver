@@ -277,7 +277,86 @@ def test_lume_steering_widget_lifecycle():
     tab._broadcast_can_frame(0x02A, 10.0, payload_enc)
     assert round(w.custom_widget.current_angle_deg, 1) == 40.1
     print("    [OK] Recepção CAN refletida no ângulo do volante Lume")
+
+    # Injeta frame CAN de esforço (0x02E)
+    payload_eff = list(struct.pack("<f", 25.0))
+    tab._broadcast_can_frame(0x02E, 50.0, payload_eff)
+    assert w.custom_widget.can_measured_torque_nm == 25.0
+    assert w.custom_widget.wheel_canvas.can_effort_nm == 25.0
+
+    # Inverte esforço via configuração
+    w.custom_widget.invert_effort = True
+    w.custom_widget.update_effort_calculation()
+    assert w.custom_widget.can_measured_torque_nm == -25.0
+    assert w.custom_widget.wheel_canvas.can_effort_nm == -25.0
+    print("    [OK] Inversão de esforço refletida no feedback visual da força Lume")
     w.custom_widget.on_close()
+
+def test_lume_safety_widget_lifecycle_and_autofit():
+    print("[11] Testando Lume Safety Widget e AutoFitButton...")
+    from src.custom_widget_api import get_lume_widgets_directory
+    lume_path = os.path.join(get_lume_widgets_directory(), "lume_safety_widget.py")
+
+    worker = CANWorker()
+    worker.mode = "SIMULATED"
+    tab = WidgetsTab(worker)
+
+    cfg = {"type": "custom_python", "script_path": lume_path}
+    w = CustomPythonDashboardWidget(tab.canvas, cfg, worker)
+    tab._place_widget(w, tab.canvas.pos())
+
+    assert w.custom_widget is not None, "LumeSafetyWidget não foi instanciado!"
+    assert w._error_msg is None, f"Erro inesperado no widget de segurança Lume: {w._error_msg}"
+
+    safety_buttons = [
+        w.custom_widget.btn_set_auto, w.custom_widget.btn_set_manual, w.custom_widget.btn_set_safestop,
+        w.custom_widget.btn_panel_on, w.custom_widget.btn_start_crank, w.custom_widget.btn_cut_engine,
+        w.custom_widget.btn_turn_left, w.custom_widget.btn_hazard, w.custom_widget.btn_turn_right,
+        w.custom_widget.btn_low_beam, w.custom_widget.btn_high_beam, w.custom_widget.btn_fog, w.custom_widget.btn_horn
+    ]
+    for b in safety_buttons:
+        assert type(b).__name__ == "AutoFitButton", f"Botão {b} não é AutoFitButton!"
+        assert b.text(), f"Botão {b} com texto vazio!"
+
+    # Injeta frame CAN 0x600 (status manual 0x02)
+    tab._broadcast_can_frame(0x600, 10.0, [0x02])
+    assert w.custom_widget.autonomous_state == "MANUAL"
+    assert "MANUAL" in w.custom_widget.lbl_safety_badge.text()
+
+    w.custom_widget.on_close()
+    print("    [OK] Lume Safety Widget e todos os 13 botões com AutoFitButton validados com sucesso!")
+
+def test_lume_pedals_widget_lifecycle_and_autofit():
+    print("[12] Testando Lume Pedals Widget e AutoFitButton...")
+    from src.custom_widget_api import get_lume_widgets_directory
+    lume_path = os.path.join(get_lume_widgets_directory(), "lume_pedals_widget.py")
+
+    worker = CANWorker()
+    worker.mode = "SIMULATED"
+    tab = WidgetsTab(worker)
+
+    cfg = {"type": "custom_python", "script_path": lume_path}
+    w = CustomPythonDashboardWidget(tab.canvas, cfg, worker)
+    tab._place_widget(w, tab.canvas.pos())
+
+    assert w.custom_widget is not None, "LumePedalsWidget não foi instanciado!"
+    assert w._error_msg is None, f"Erro inesperado no widget de pedais Lume: {w._error_msg}"
+
+    gear_buttons = [
+        w.custom_widget.btn_gear_p, w.custom_widget.btn_gear_r, w.custom_widget.btn_gear_n,
+        w.custom_widget.btn_gear_d, w.custom_widget.btn_gear_down, w.custom_widget.btn_gear_up,
+        w.custom_widget.btn_e_stop
+    ]
+    for b in gear_buttons:
+        assert type(b).__name__ == "AutoFitButton", f"Botão {b} não é AutoFitButton!"
+        assert b.text(), f"Botão {b} com texto vazio!"
+
+    # Testa comando de marcha
+    w.custom_widget.cmd_gear(0x01, "R")
+    assert w.custom_widget.current_gear == "R"
+
+    w.custom_widget.on_close()
+    print("    [OK] Lume Pedals Widget e botões de câmbio / e-stop com AutoFitButton validados com sucesso!")
 
 if __name__ == "__main__":
     test_discovery()
@@ -290,4 +369,6 @@ if __name__ == "__main__":
     test_lume_widgets_and_grouped_sections()
     test_external_folder_linking()
     test_lume_steering_widget_lifecycle()
+    test_lume_safety_widget_lifecycle_and_autofit()
+    test_lume_pedals_widget_lifecycle_and_autofit()
     print("\nTODOS OS TESTES DAS NOVAS FUNCIONALIDADES PASSARAM COM 100% DE SUCESSO!")
